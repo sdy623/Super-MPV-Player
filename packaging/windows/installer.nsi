@@ -6,7 +6,7 @@
 !define PAYLOAD "..\payload"
 !endif
 !ifndef OUTPUT
-!define OUTPUT "..\dist\MPV-Complete-2.0.0-x64-Setup.exe"
+!define OUTPUT "..\dist\MPV-Complete-2.1.0-x64-Setup.exe"
 !endif
 !define PRODUCT "MPV Complete"
 !define OWNER "MPVComplete-NSIS-v2"
@@ -24,10 +24,10 @@ ShowUninstDetails show
 BrandingText "MPV Complete - integrated media player"
 Icon "${PAYLOAD}\installer\mpv-icon.ico"
 UninstallIcon "${PAYLOAD}\installer\mpv-icon.ico"
-VIProductVersion "2.0.0.4"
+VIProductVersion "2.1.0.0"
 VIAddVersionKey "ProductName" "${PRODUCT}"
 VIAddVersionKey "FileDescription" "Per-user MPV installer with no-console launcher"
-VIAddVersionKey "FileVersion" "2.0.0.4"
+VIAddVersionKey "FileVersion" "2.1.0.0"
 VIAddVersionKey "LegalCopyright" "Third-party components retain their respective licenses"
 Var TestMode
 Var Links
@@ -138,7 +138,7 @@ Section "Player" SEC_PLAYER
     ${If} $TestMode != "1"
         CreateShortcut "$DESKTOP\MPV Complete.lnk" "$INSTDIR\MPV-Anime.exe" "" "$INSTDIR\MPV-Anime.exe" 0 SW_SHOWNORMAL
         WriteRegStr HKCU "${REGKEY}" "DisplayName" "${PRODUCT}"
-        WriteRegStr HKCU "${REGKEY}" "DisplayVersion" "2.0.0"
+        WriteRegStr HKCU "${REGKEY}" "DisplayVersion" "2.1.0"
         WriteRegStr HKCU "${REGKEY}" "InstallLocation" "$INSTDIR"
         WriteRegStr HKCU "${REGKEY}" "DisplayIcon" "$INSTDIR\MPV-Anime.exe"
         WriteRegStr HKCU "${REGKEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'

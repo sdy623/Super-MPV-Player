@@ -71,3 +71,7 @@ Native Tools shell, `tests/test_windows_gpu_fences.py <output-dir>` tests 64 que
 GPU round trips with exact UNORM/FP16 pixels and the legacy synchronization branch.
 The GPU fixture requires a compatible hardware adapter; its bounded readback is
 for verification only, not the playback path.
+
+## Later actual-entry result and release decision
+
+The actual-launcher full HLG six-resume test subsequently recorded **30 output drops**, zero decoder drops and no fallback. The initial local promotion was rolled back. This supersedes any interpretation that the earlier passing run established reliable zero-drop resume. An isolated input-sample-pool experiment later recorded 17 output drops and is excluded. The user then requested release of the current committed HEAD with this known limitation. See [2.1.0 release notes](release-2.1.0.md).

@@ -7,7 +7,7 @@ The release uses one UCRT64 integrated core, with Windows processing and origina
 1. Use an MSYS2 UCRT64 environment with GCC, Meson and Ninja. Exact versions and source/build-recipe archives for the shipped dynamic libraries are in `docs/native-dependency-sources.json`; use those ABIs, not a blanket latest-library upgrade.
 2. The companion source archive includes the required ASIO headers under `third_party/asio`, used under GPLv3. Git checkouts can obtain the pinned SDK from `sources.lock.json`. Run `packaging/windows/Build-Core.ps1` from an environment where UCRT64 compiler and Meson are on PATH. `core-build-options.json` records the original core build options, with the SDK path made portable. The Windows DV filter is part of the Windows source build, not a separate Meson option.
 3. Build the Windows frame and RPU adapters as described in `windows/native-dv/README.md`. The source archive includes the pinned dovi_tool dependency at that README's relative path. Public Windows SDK/Visual Studio components remain external build dependencies.
-4. Compile `MpvAnimeLauncher.cs` with the .NET Framework C# compiler using `/target:winexe /reference:System.Windows.Forms.dll /reference:System.Web.Extensions.dll /out:MPV-Anime.exe`. The launcher source performs no automatic third-party installation.
+4. Compile `MpvAnimeLauncher.cs` with the .NET Framework C# compiler using `/target:winexe /reference:System.Windows.Forms.dll /reference:System.Web.Extensions.dll /reference:System.Drawing.dll /out:MPV-Anime.exe`. The launcher source performs no automatic third-party installation.
 
 These instructions and upstream recipes provide the source/build inputs; a fresh full dependency rebuild and bit-identical reproduction were not part of this packaging verification.
 
@@ -19,7 +19,7 @@ Use the same portable configuration and plugin sources, Java/BD-J runtime and no
 
 The NSIS `TESTMODE` switch writes shortcuts inside the test installation and avoids production shortcut/registry changes. The public installer requires an ASCII installation directory for this Java/BD-J combination. It does not change file associations or start playback automatically.
 
-## Post-2.0.0 source candidate: patched libplacebo
+## 2.1.0: patched libplacebo
 
 This branch now requires libplacebo 7.387.0 and the checked-in XYZ patch. The existing
 2.0.0 release and its dependency manifest remain historical; candidate replacements
@@ -44,5 +44,5 @@ The tested Windows candidate uses D3D11/OpenGL; Vulkan is disabled in this build
 The generic XYZ path needs both the MPV and libplacebo changes. It is not a
 standalone Lua configuration fix. No title/CPL exceptions are shipped.
 
-This source commit is not a new installer release. Playback acceptance and the
-remaining pause/resume drops are recorded in `docs/post-2.0.0-candidate.md`.
+Playback results and the accepted known pause/resume drops are recorded in
+`docs/release-2.1.0.md` and `docs/post-2.0.0-candidate.md`.

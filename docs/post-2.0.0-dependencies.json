@@ -14,5 +14,19 @@
       "dovi": true
     }
   },
-  "scope": "Source candidate; no new public package or binary redistribution in this commit"
+  "scope": "2.1.0 replacement/additional runtime libraries; base manifest remains included",
+  "additional": [
+    {
+      "file": "librubberband-3.dll",
+      "source_url": "https://repo.msys2.org/mingw/sources/mingw-w64-rubberband-4.0.0-1.src.tar.zst"
+    },
+    {
+      "file": "libsixel-1.dll",
+      "source_url": "https://repo.msys2.org/mingw/sources/mingw-w64-libsixel-1.8.7_r2-1.src.tar.zst"
+    },
+    {
+      "file": "libz-1.dll",
+      "source_url": "https://repo.msys2.org/mingw/sources/mingw-w64-zlib-1.4-2.src.tar.zst"
+    }
+  ]
 }

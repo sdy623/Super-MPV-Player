@@ -1,4 +1,4 @@
-# Open edition: Windows release candidate
+# Open edition: Windows 2.1.0
 
 Video and audio are independent choices. Windows Dolby video processing may run together with Omniphony object audio. Omniphony does not implement Dolby Vision video.
 
@@ -34,16 +34,15 @@ The public candidate uses the same source-backed integrated core for its origina
 ## Build and release status
 The exact integrated MPV source is in `core/mpv`; upstream revision pins are in `sources.lock.json`. Existing UI/config and plugin submodules are retained. Native bridge source is in `windows/native-dv`. See its build.cmd and RPU adapter instructions; Visual Studio and Windows SDK are build dependencies, not redistribution payloads.
 
-The Windows 2.0.0 release packages the tested integrated core and merged configuration. See [verification and limitations](release-2.0.0.md), [assembly instructions](../packaging/windows/README.md), and [exact native dependency sources](native-dependency-sources.json). The companion source archive includes the integrated sources, submodule sources, pinned RPU dependency and required ASIO headers. Vendor runtime notices and source-availability information remain in the installer. Fresh full dependency recompilation and bit-identical reproduction were not performed during packaging. Antivirus vendor review remains pending; functional launch success is not a clean antivirus verdict.
+The Windows 2.1.0 release packages the integrated core and merged configuration with known Windows-DV resume drops. See [verification and limitations](release-2.1.0.md), [assembly instructions](../packaging/windows/README.md), and [exact native dependency sources](native-dependency-sources.json). The companion source archive includes the integrated sources, submodule sources, pinned RPU dependency and required ASIO headers. Vendor runtime notices and source-availability information remain in the installer. Fresh full dependency recompilation and bit-identical reproduction were not performed during packaging. Antivirus vendor review remains pending; functional launch success is not a clean antivirus verdict.
 
 ## Theme helper and generic display defaults
 
 The source tree excludes prebuilt ziggy executables. File-picker features need the matching official uosc helper in a runtime assembly. Configuration archives are not complete player installers. The open edition defaults to following the display; the optional SDR preset uses a 203-nit reference, not a measured panel luminance. No machine GPU name or personal ICC is imported by this upgrade.
 
 
-## Post-2.0.0 development
+## 2.1.0 changes
 The current source adds explicit PQ/HLG GPU transport, FP16 HLG output, generic
-XYZ/ICM DCP playback and pre-roll-aware DV seeks. It is ahead of the published
-2.0.0 binary. See [candidate status](post-2.0.0-candidate.md) for measured improvements
+XYZ/ICM DCP playback and pre-roll-aware DV seeks. These changes are included in 2.1.0. See [candidate status](post-2.0.0-candidate.md) for measured improvements
 and remaining playback failures. Official Dolby dependency detection, separate
 Omniphony/libfreemkv installation and original mapping remain required contracts.
