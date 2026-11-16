@@ -23,4 +23,27 @@ Self-contained, single-volume unencrypted 2D SMPTE/Interop picture + sound compo
 - `plugins/mpv-dcp/dcp.py`: read-only XML/EDL parser.
 - `core-dcp.patch` in the task workspace: narrowly scoped PCM decoder opt-in.
 
-Implementation follows the bundled upstream `DOCS/edl-mpv.rst` and hook/property manual. The unchanged gpu-next renderer recognizes the sample's JPEG2000 xyz12 / XYZ / ST428 signal. No Dolby profile is forged or forced on DCP content.
+## Color management
+Ordinary SDR DCP uses 12-bit XYZ/ST428 and floating-point gpu-next processing.
+Default `white_mode=preserve` keeps XYZ colorimetry, using a wide D65 RGB working
+space before final display gamut mapping and factory ICM. This does not declare
+the original master BT2020 and does not clamp it into Rec709. No CPL or title
+exceptions are read or shipped. The matched mpv/libplacebo XYZ patch is required.
+
+While playing DCP, Ctrl+Alt+H (or the theme's DCP/palette button) opens:
+- Preserve XYZ colorimetry (default).
+- Cinema reference-white adaptation (DCI to display), an intentional appearance
+  adjustment, not automatic source-white detection or projector calibration.
+Both preserve precision and display ICM. Selection is session-local. To change
+the startup default, set `white_mode=cinema` or `preserve` in script-opts/dcp.conf.
+
+The Windows Dolby filter is excluded file-locally. Subsequent non-DCP playback
+restores the prior filter/settings. PCM pairing, chapters and the timeline are
+unchanged. DCP HDR/3D, encrypted/KDM assets and DCP timed-text import are not
+implemented by this SDR path; see the limitations above.
+
+Standalone XYZ/ST428 MXF uses the same color policy and menu; a picture-only MXF
+has no CPL sound pairing. JPEG2000 playback has a file-local decode queue bounded
+by 8 frames, 0.35 seconds and 256 MiB. This separates software decoding from the
+player thread without reducing resolution or precision. Ordinary video retains
+its existing queue options.

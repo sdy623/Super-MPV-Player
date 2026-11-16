@@ -88,7 +88,7 @@
   "vaapi-wayland": "auto",
   "vaapi-win32": "auto",
   "vaapi-x11": "auto",
-  "vulkan": "enabled",
+  "vulkan": "disabled",
   "wayland": "auto",
   "x11": "auto",
   "xv": "auto",

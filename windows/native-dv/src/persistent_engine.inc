@@ -39,7 +39,7 @@ struct ContextLease {
 };
 static double gpu_clock_ms(){LARGE_INTEGER c,f;QueryPerformanceCounter(&c);QueryPerformanceFrequency(&f);return 1000.0*double(c.QuadPart)/f.QuadPart;}
 struct PersistentEngine {
-    uint64_t prep_ms=0,copy_ms=0; bool hlg=false; uint32_t fps_n=24000,fps_d=1001,chroma=0;
+    uint64_t prep_ms=0,copy_ms=0; bool fp16=false; bool hlg=false; uint32_t fps_n=24000,fps_d=1001,chroma=0;
     const wdv_gpu_frame_v5*gpu=nullptr; ID3D11Device*shared_device=nullptr;
     ComPtr<ID3D11DeviceContext> caller_context;
     ComPtr<ID3D10Multithread> caller_mt;
@@ -53,7 +53,7 @@ struct PersistentEngine {
     ComPtr<RawSource> queue;
     LONGLONG origin=0,previous=-1,last_end=0;bool need_step=false;uint64_t rendered=0;
     uint32_t w,h,count;const wdv_frame_v2*input;wdv_output_v2*output;
-    PersistentEngine(const wdv_frame_v2*i,uint32_t n,uint32_t width,uint32_t height,wdv_output_v2*o,bool is_hlg=false,uint32_t fn=24000,uint32_t fd=1001,uint32_t cs=0,const wdv_gpu_frame_v5*g=nullptr,ID3D11Device*dev=nullptr):hlg(is_hlg),fps_n(fn),fps_d(fd),chroma(cs),gpu(g),shared_device(dev),w(width),h(height),count(n),input(i),output(o){origin=i[0].pts-10000000;}
+    PersistentEngine(const wdv_frame_v2*i,uint32_t n,uint32_t width,uint32_t height,wdv_output_v2*o,bool is_hlg=false,uint32_t fn=24000,uint32_t fd=1001,uint32_t cs=0,const wdv_gpu_frame_v5*g=nullptr,ID3D11Device*dev=nullptr,bool use_float=false):fp16(use_float),hlg(is_hlg),fps_n(fn),fps_d(fd),chroma(cs),gpu(g),shared_device(dev),w(width),h(height),count(n),input(i),output(o){origin=i[0].pts-10000000;}
     ~PersistentEngine(){if(engine)engine->Shutdown();if(extension&&extension->source)extension->source->Shutdown();if(window)DestroyWindow(window);}
     static LRESULT CALLBACK wnd(HWND hw,UINT m,WPARAM wp,LPARAM lp){
         auto*p=reinterpret_cast<PersistentEngine*>(GetWindowLongPtrW(hw,GWLP_USERDATA));
@@ -61,6 +61,7 @@ struct PersistentEngine {
         if(p&&m==EV){if(wp==MF_MEDIA_ENGINE_EVENT_LOADEDMETADATA){p->metadata=true;p->error=p->engine->SetCurrentTime(1);}if(wp==MF_MEDIA_ENGINE_EVENT_FIRSTFRAMEREADY)p->ready=true;if(wp==MF_MEDIA_ENGINE_EVENT_FRAMESTEPCOMPLETED)p->stepReady=true;if(wp==MF_MEDIA_ENGINE_EVENT_ERROR)p->error=FAILED(HRESULT(lp))?HRESULT(lp):E_FAIL;return 0;}
         return DefWindowProcW(hw,m,wp,lp);
     }
+    DXGI_FORMAT output_format() const {return fp16?DXGI_FORMAT_R16G16B16A16_FLOAT:DXGI_FORMAT_B8G8R8A8_UNORM;}
     void init(){
         HMODULE self=nullptr;CK(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,reinterpret_cast<LPCWSTR>(&wnd),&self)?S_OK:HRESULT_FROM_WIN32(GetLastError()));
         wchar_t filename[32768];DWORD n=GetModuleFileNameW(self,filename,32768);if(!n||n>=32768)throw Failure{E_FAIL,"module path"};
@@ -79,20 +80,20 @@ struct PersistentEngine {
             CK(shared_device->QueryInterface(IID_PPV_ARGS(&caller_mt)));
             if(!caller_mt->GetMultithreadProtected())throw Failure{E_FAIL,"MPV device lacks multithread protection"};
             for(auto& surface:input_shared)surface.init(shared_device,d3d.Get(),w,h,DXGI_FORMAT_P010);
-            output_shared.init(shared_device,d3d.Get(),w,h,DXGI_FORMAT_B8G8R8A8_UNORM);
+            output_shared.init(shared_device,d3d.Get(),w,h,output_format());
         }else CK(D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_HARDWARE,nullptr,D3D11_CREATE_DEVICE_VIDEO_SUPPORT|D3D11_CREATE_DEVICE_BGRA_SUPPORT,nullptr,0,D3D11_SDK_VERSION,&d3d,nullptr,&context));
         ComPtr<ID3D10Multithread> mt;CK(d3d.As(&mt));mt->SetMultithreadProtected(TRUE);
         UINT token=0;CK(MFCreateDXGIDeviceManager(&token,&manager));CK(manager->ResetDevice(d3d.Get(),token));
         ComPtr<IMFMediaType> type;CK(MFCreateMediaType(&type));CK(type->SetGUID(MF_MT_MAJOR_TYPE,MFMediaType_Video));CK(type->SetGUID(MF_MT_SUBTYPE,MFVideoFormat_P010));
         CK(MFSetAttributeSize(type.Get(),MF_MT_FRAME_SIZE,w,h));CK(MFSetAttributeRatio(type.Get(),MF_MT_FRAME_RATE,fps_n,fps_d));CK(MFSetAttributeRatio(type.Get(),MF_MT_PIXEL_ASPECT_RATIO,1,1));
         CK(type->SetUINT32(MF_MT_INTERLACE_MODE,MFVideoInterlace_Progressive));CK(type->SetUINT32(MF_MT_VIDEO_PRIMARIES,MFVideoPrimaries_BT2020));CK(type->SetUINT32(MF_MT_TRANSFER_FUNCTION,hlg?MFVideoTransFunc_HLG:MFVideoTransFunc_2084));CK(type->SetUINT32(MF_MT_YUV_MATRIX,MFVideoTransferMatrix_BT2020_10));CK(type->SetUINT32(MF_MT_VIDEO_NOMINAL_RANGE,MFNominalRange_16_235));CK(type->SetString(MF_MT_VIDEO_RENDERER_EXTENSION_PROFILE,L"dvhe.08"));
-        if(hlg)CK(type->SetUINT32(MF_MT_VIDEO_CHROMA_SITING,MFVideoChromaSubsampling_ProgressiveChroma | (chroma?MFVideoChromaSubsampling_Cosited:MFVideoChromaSubsampling_MPEG2)));
+        if(hlg || gpu)CK(type->SetUINT32(MF_MT_VIDEO_CHROMA_SITING,MFVideoChromaSubsampling_ProgressiveChroma | (chroma?MFVideoChromaSubsampling_Cosited:MFVideoChromaSubsampling_MPEG2)));
         queue=Make<RawSource>(make_frames(),type.Get(),86400LL*10000000,true);
         extension=Make<SourceExtension>();extension->source=queue;
-        auto notify=Make<Notify>();notify->window=window;ComPtr<IMFAttributes> a;CK(MFCreateAttributes(&a,8));CK(a->SetUINT32(MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT,DXGI_FORMAT_B8G8R8A8_UNORM));CK(a->SetUnknown(MF_MEDIA_ENGINE_CALLBACK,notify.Get()));CK(a->SetUnknown(MF_MEDIA_ENGINE_DXGI_MANAGER,manager.Get()));CK(a->SetUnknown(MF_MEDIA_ENGINE_EXTENSION,extension.Get()));CK(a->SetUINT64(MF_MEDIA_ENGINE_OPM_HWND,UINT64(UINT_PTR(window))));CK(a->SetGUID(MF_MEDIA_ENGINE_BROWSER_COMPATIBILITY_MODE,MF_MEDIA_ENGINE_BROWSER_COMPATIBILITY_MODE_IE_EDGE));
+        auto notify=Make<Notify>();notify->window=window;ComPtr<IMFAttributes> a;CK(MFCreateAttributes(&a,8));CK(a->SetUINT32(MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT,output_format()));CK(a->SetUnknown(MF_MEDIA_ENGINE_CALLBACK,notify.Get()));CK(a->SetUnknown(MF_MEDIA_ENGINE_DXGI_MANAGER,manager.Get()));CK(a->SetUnknown(MF_MEDIA_ENGINE_EXTENSION,extension.Get()));CK(a->SetUINT64(MF_MEDIA_ENGINE_OPM_HWND,UINT64(UINT_PTR(window))));CK(a->SetGUID(MF_MEDIA_ENGINE_BROWSER_COMPATIBILITY_MODE,MF_MEDIA_ENGINE_BROWSER_COMPATIBILITY_MODE_IE_EDGE));
         ComPtr<IMFMediaEngineClassFactory> factory;CK(CoCreateInstance(CLSID_MFMediaEngineClassFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&factory)));CK(factory->CreateInstance(gpu ? MF_MEDIA_ENGINE_REAL_TIME_MODE : 0,a.Get(),&engine));CK(engine.As(&ex));CK(engine->SetMuted(TRUE));
         BSTR uri=SysAllocString(L"mpv-frame-source");HRESULT hr=engine->SetSource(uri);SysFreeString(uri);CK(hr);
-        {D3D11_TEXTURE2D_DESC td{};td.Width=w;td.Height=h;td.MipLevels=1;td.ArraySize=1;td.Format=DXGI_FORMAT_B8G8R8A8_UNORM;td.SampleDesc.Count=1;td.Usage=D3D11_USAGE_DEFAULT;td.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;CK(d3d->CreateTexture2D(&td,nullptr,&texture));if(!gpu){td.Usage=D3D11_USAGE_STAGING;td.BindFlags=0;td.CPUAccessFlags=D3D11_CPU_ACCESS_READ;CK(d3d->CreateTexture2D(&td,nullptr,&staging));}}
+        {D3D11_TEXTURE2D_DESC td{};td.Width=w;td.Height=h;td.MipLevels=1;td.ArraySize=1;td.Format=output_format();td.SampleDesc.Count=1;td.Usage=D3D11_USAGE_DEFAULT;td.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;CK(d3d->CreateTexture2D(&td,nullptr,&texture));if(!gpu){td.Usage=D3D11_USAGE_STAGING;td.BindFlags=0;td.CPUAccessFlags=D3D11_CPU_ACCESS_READ;CK(d3d->CreateTexture2D(&td,nullptr,&staging));}}
     }
     void wait_for_frame(){
         if(gpu){
@@ -185,11 +186,11 @@ struct PersistentEngine {
 
 struct PersistentSession {
     ComPtr<ID3D11Device> gpu_device; const wdv_gpu_frame_v5*gpu=nullptr;
-    uint64_t prep_ms=0,copy_ms=0; bool hlg=false; uint32_t fps_n=24000,fps_d=1001,chroma=0;
+    uint64_t prep_ms=0,copy_ms=0; bool fp16=false; bool hlg=false; uint32_t fps_n=24000,fps_d=1001,chroma=0;
     std::mutex gate;std::condition_variable cv;std::thread thread;
     bool stop=false,pending=false,finished=false;int rc=-1;std::string error;
     const wdv_frame_v2*in=nullptr;wdv_output_v2*out=nullptr;uint32_t n=0,w=0,h=0;
-    PersistentSession(bool is_hlg=false,uint32_t fn=24000,uint32_t fd=1001,uint32_t cs=0,ID3D11Device*dev=nullptr):gpu_device(dev),hlg(is_hlg),fps_n(fn),fps_d(fd),chroma(cs){thread=std::thread([this]{loop();});}
+    PersistentSession(bool is_hlg=false,uint32_t fn=24000,uint32_t fd=1001,uint32_t cs=0,ID3D11Device*dev=nullptr,bool use_float=false):gpu_device(dev),fp16(use_float),hlg(is_hlg),fps_n(fn),fps_d(fd),chroma(cs){thread=std::thread([this]{loop();});}
     ~PersistentSession(){{std::lock_guard<std::mutex>l(gate);stop=true;cv.notify_all();}thread.join();}
     void loop(){
         HRESULT co=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);HRESULT mf=SUCCEEDED(co)?MFStartup(MF_VERSION):co;
@@ -199,8 +200,8 @@ struct PersistentSession {
             std::string why;int result=-2;
             try{
                 CK(co);CK(mf);
-                if(engine&&(engine->w!=w||engine->h!=h||std::llabs(in[0].pts-engine->last_end)>(hlg?std::max<LONGLONG>(2000,(10000000LL*fps_d/fps_n)/2):2000)))engine.reset();
-                if(!engine)engine=std::make_unique<PersistentEngine>(in,n,w,h,out,hlg,fps_n,fps_d,chroma,gpu,gpu_device.Get());
+                if(engine&&(engine->w!=w||engine->h!=h||std::llabs(in[0].pts-engine->last_end)>((hlg||gpu)?std::max<LONGLONG>(2000,(10000000LL*fps_d/fps_n)/2):2000)))engine.reset();
+                if(!engine)engine=std::make_unique<PersistentEngine>(in,n,w,h,out,hlg,fps_n,fps_d,chroma,gpu,gpu_device.Get(),fp16);
                 else{engine->input=in;engine->output=out;engine->count=n;engine->gpu=gpu;}
                 result=engine->run();
             }catch(const Failure&e){std::ostringstream s;s<<e.site<<" HRESULT=0x"<<std::hex<<uint32_t(e.hr);why=s.str();engine.reset();}
@@ -226,15 +227,26 @@ extern "C" __declspec(dllexport) void* wdv_create_gpu_v5(void*device,uint32_t fn
     if(!device||!fn||!fd||cs>1||double(fn)/fd>240)return nullptr;
     try{return new PersistentSession(true,fn,fd,cs,static_cast<ID3D11Device*>(device));}catch(...){return nullptr;}
 }
+// Explicit transfer ABI. 1 = ST2084/PQ, 2 = HLG. Legacy v5 stays HLG.
+extern "C" __declspec(dllexport) void* wdv_create_gpu_v6(void*device,uint32_t fn,uint32_t fd,uint32_t cs,uint32_t transfer){
+    if(!device||!fn||!fd||cs>1||double(fn)/fd>240||(transfer!=1&&transfer!=2))return nullptr;
+    try{return new PersistentSession(transfer==2,fn,fd,cs,static_cast<ID3D11Device*>(device));}catch(...){return nullptr;}
+}
 extern "C" __declspec(dllexport) int wdv_render_gpu_v5(void*ctx,const wdv_frame_v2*in,const wdv_gpu_frame_v5*gpu,uint32_t n,uint32_t w,uint32_t h,wdv_output_v2*out,char*err,uint32_t cap){
     if(!ctx||!in||!gpu||!out||!n||n>8||w<2||h<2||(w&1)||(h&1)||w>3840||h>2160)return -1;
     auto*p=static_cast<PersistentSession*>(ctx);
     for(uint32_t i=0;i<n;i++){
         if(!gpu[i].input_texture||!gpu[i].output_texture||!in[i].rpu||!in[i].rpu_len||in[i].rpu_len>65536||in[i].duration<=0)return -1;
         auto*tex=static_cast<ID3D11Texture2D*>(gpu[i].output_texture);D3D11_TEXTURE2D_DESC d{};tex->GetDesc(&d);ComPtr<ID3D11Device> owner;tex->GetDevice(&owner);
-        if(owner.Get()!=p->gpu_device.Get()||d.Format!=DXGI_FORMAT_B8G8R8A8_UNORM||d.Width!=w||d.Height!=h||d.ArraySize!=1||!(d.BindFlags&D3D11_BIND_RENDER_TARGET))return -1;
+        if(owner.Get()!=p->gpu_device.Get()||d.Format!=(p->fp16?DXGI_FORMAT_R16G16B16A16_FLOAT:DXGI_FORMAT_B8G8R8A8_UNORM)||d.Width!=w||d.Height!=h||d.ArraySize!=1||!(d.BindFlags&D3D11_BIND_RENDER_TARGET))return -1;
     }
     std::unique_lock<std::mutex>l(p->gate);if(p->pending)return -3;
     p->in=in;p->gpu=gpu;p->n=n;p->w=w;p->h=h;p->out=out;p->pending=true;p->finished=false;p->cv.notify_all();p->cv.wait(l,[&]{return p->finished;});
     if(err&&cap){size_t bytes=std::min<size_t>(cap-1,p->error.size());memcpy(err,p->error.data(),bytes);err[bytes]=0;}return p->rc;
+}
+
+// v7 opts into FP16 extended linear RGB. v5/v6 retain their BGRA contract.
+extern "C" __declspec(dllexport) void* wdv_create_gpu_v7(void*device,uint32_t fn,uint32_t fd,uint32_t cs,uint32_t transfer){
+    if(!device||!fn||!fd||cs>1||double(fn)/fd>240||(transfer!=1&&transfer!=2))return nullptr;
+    try{return new PersistentSession(transfer==2,fn,fd,cs,static_cast<ID3D11Device*>(device),true);}catch(...){return nullptr;}
 }

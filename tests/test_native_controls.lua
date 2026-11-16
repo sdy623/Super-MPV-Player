@@ -1,6 +1,6 @@
 local target=arg[1];local directory=target:match('^(.*)[/\\]');local messages,timers,props,commands={},{},{},{}
 local reply,parsed
-mp={msg={error=function()end},get_property_native=function(k,d)return props[k] or d end,get_property_bool=function(k,d)return d end,get_property_number=function()return 0 end,
+mp={get_property=function(k,d)return props[k] or d end,msg={error=function()end},get_property_native=function(k,d)return props[k] or d end,get_property_bool=function(k,d)return d end,get_property_number=function()return 0 end,
 set_property_native=function(k,v)props[k]=v end,register_event=function()end,register_script_message=function(k,f)messages[k]=f end,
 add_key_binding=function()end,observe_property=function()end,add_periodic_timer=function()end,add_timeout=function(_,f)timers[#timers+1]=f end,
 osd_message=function()end,commandv=function(...)local c={...};commands[#commands+1]=c;if c[1]=='vf' then props.vf=c[2]=='add' and {{label='windows_dv'}} or {} end;return true end,command_native_async=function(_,f)reply=f end}
@@ -21,6 +21,13 @@ props['vf-metadata/windows_dv']={state='processed',['processed-frames']='120',['
 messages['windows-dv-inwindow-status']();assert(props['user-data/windows-dv-inwindow'].windows_processed,'GPU BGRA must count as actual Windows processing')
 props['vf-metadata/windows_dv']['gpu-frames']='0';messages['windows-dv-inwindow-status']();assert(not props['user-data/windows-dv-inwindow'].windows_processed,'hardware format alone is not proof')
 props['video-out-params']={pixelformat='bgra'};messages['windows-dv-inwindow-status']();assert(props['user-data/windows-dv-inwindow'].windows_processed,'CPU/P7 status must remain valid')
+props['video-out-params']={pixelformat='d3d11',['hw-pixelformat']='rgbaf16'}
+props['vf-metadata/windows_dv']['gpu-frames']='120';messages['windows-dv-inwindow-status']()
+assert(props['user-data/windows-dv-inwindow'].windows_processed and props['user-data/windows-dv-inwindow'].float_output,'FP16 must be recognized without weakening dependency checks')
+messages['windows-dv-inwindow-disable']();props['user-data/dcp']={active=true};local before=#commands
+messages['windows-dv-inwindow-enable']();assert(#commands==before,'DCP must not enter Dolby bridge')
+assert(props['user-data/windows-dv-inwindow'].state=='disabled-for-dcp')
+props['user-data/dcp']={};messages['windows-dv-inwindow-enable']()
 messages['windows-dv-dependencies-refresh']();reply(false,nil)
 assert(not props['user-data/windows-dv-inwindow'].available);assert(#props.vf==0,'failed probe must remove active filter')
 print('PASS missing, multi-display, missing profile, explicit ICC, no false processing claim, fail-closed filter removal')

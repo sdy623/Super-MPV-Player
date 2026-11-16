@@ -1,0 +1,22 @@
+--- a/src/renderer.c
++++ b/src/renderer.c
+@@ -3448,13 +3448,12 @@
+         if (!color->primaries)
+             color->primaries = PL_COLOR_PRIM_BT_2020;
+     } else {
+-        // Anything else is assumed to be DCDM X'Y'Z' (SMPTE ST 428-1): a 2.6
+-        // gamma encoding mastered on a reference projector with DCI white, so
+-        // decode it into DCI-P3 and let the color mapping adapt the DCI white
+-        // point towards the display. This deliberately overrides any tagged
+-        // primaries, since in practice they are meaningless for DCDM (e.g.
+-        // BT.709 fallbacks, or lavu's mapping of ST 428-1 to CIE 1931 RGB).
+-        color->primaries = PL_COLOR_PRIM_DCI_P3;
++        // DCDM uses ST 428-1 encoding. The adopted white point is not
++        // encoded by XYZ itself: honor an explicitly selected RGB working
++        // space. PC colorimetric playback defaults to wide D65; cinema
++        // white adaptation is an explicit DCI-P3 selection, never inferred.
++        if (!color->primaries)
++            color->primaries = PL_COLOR_PRIM_BT_2020;
+         color->transfer = PL_COLOR_TRC_ST428;
+     }
+ }

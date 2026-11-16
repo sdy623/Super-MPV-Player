@@ -98,7 +98,7 @@ def prepare(source):
     if audio and len(audio)!=len(video):raise ValueError('部分 Reel 缺少声音，不能保证对齐')
     edl='edl://'+';'.join(video)
     if audio:edl+=';!new_stream;'+';'.join(audio)
-    return dict(title=title,cpl=str(cp),duration=float(total),reels=reels,chapters=chapters,edl=edl,audio_pan=pan if audio else None,audio_configuration=config,warnings=sorted(set(warnings)))
+    return dict(title=title,cpl=str(cp),cpl_id=text(cpl,'Id').lower(),duration=float(total),reels=reels,chapters=chapters,edl=edl,audio_pan=pan if audio else None,audio_configuration=config,warnings=sorted(set(warnings)))
 if __name__=='__main__':
     try:result={'ok':True,**prepare(sys.argv[1])}
     except (ValueError,OSError,ET.ParseError,ZeroDivisionError) as e:result={'ok':False,'error':str(e)}

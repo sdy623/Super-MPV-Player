@@ -2,9 +2,61 @@
 local utils = require 'mp.utils'
 local options = require 'mp.options'
 local here = utils.split_path(debug.getinfo(1, 'S').source:gsub('^@',''))
-local o = {python=mp.command_native({'expand-path','~~/../runtime/anime-nlp/python/python.exe'})}
+local o = {python=mp.command_native({'expand-path','~~/../runtime/anime-nlp/python/python.exe'}),white_mode='preserve'}
 options.read_options(o,'dcp')
 local current
+local file_loaded=false
+-- XYZ contains colorimetry, not a mandatory RGB mastering white. Default to
+-- a wide D65 working space without a DCI-to-D65 adaptation. No title/CPL rules.
+local color_mode=o.white_mode=='cinema' and 'cinema' or 'preserve'
+local function apply_picture_path()
+    local vf={}
+    for _,f in ipairs(mp.get_property_native('vf',{})) do
+        if f.label~='windows_dv' and f.label~='dcp_xyz' then vf[#vf+1]=f end
+    end
+    vf[#vf+1]={name='format',label='dcp_xyz',params={
+        primaries=color_mode=='cinema' and 'dci-p3' or 'bt.2020'}}
+    mp.set_property_native('file-local-options/vf',vf)
+    mp.set_property_bool('file-local-options/icc-profile-auto',true)
+    -- Display brightness is not a reason to apply a cinema white adaptation.
+    mp.set_property('file-local-options/target-prim','auto')
+    mp.set_property('file-local-options/target-trc','auto')
+    mp.set_property('file-local-options/target-peak','auto')
+end
+local function publish()
+    if not current then return end
+    local data=current
+    mp.set_property_native('user-data/dcp',{state=data.standalone and 'xyz' or 'paired',active=true,cpl=data.cpl,cpl_id=data.cpl_id,
+        color_mode=color_mode,xyz_white=color_mode=='cinema' and 'DCI adaptation' or 'preserve XYZ',
+        picture_path='gpu-next XYZ / factory ICM',title=data.title,duration=data.duration,
+        reels=#data.reels,audio_configuration=data.audio_configuration,warnings=data.warnings})
+end
+local function detect_standalone_xyz()
+    if current or not file_loaded then return end
+    local par=mp.get_property_native('video-params',{})
+    if par.colormatrix~='xyz' or par.gamma~='st428' or
+       not mp.get_property('path',''):lower():match('%.mxf$') then return end
+    -- Standalone picture has no CPL audio pairing. It still uses exactly the
+    -- same color policy and bypasses Windows DV once XYZ is identified.
+    current={standalone=true,title=mp.get_property('media-title','DCP XYZ'),
+        duration=mp.get_property_native('duration'),reels={},warnings={},audio_configuration=''}
+    apply_picture_path();publish()
+end
+local function color_menu()
+    if not current then mp.osd_message('请先打开 DCP 文件夹或 CPL',3);return end
+    local data={type='dcp-color',title='DCP 色彩管理',items={
+        {title='保持 XYZ 色度（默认）',active=color_mode=='preserve',value={'script-message','dcp-color-mode','preserve'}},
+        {title='影院参考白适配（DCI → 屏幕）',active=color_mode=='cinema',value={'script-message','dcp-color-mode','cinema'}},
+        {title='出厂 ICM · 浮点处理 · 不走杜比桥',selectable=false,muted=true,value={'ignore'}},
+        {title='选择仅本次运行有效；不会修改 DCP',selectable=false,muted=true,value={'ignore'}}}}
+    mp.set_property_native('user-data/dcp-menu',data)
+    mp.commandv('script-message-to','uosc','open-menu',utils.format_json(data))
+end
+mp.register_script_message('dcp-color-mode',function(mode)
+    if not current or (mode~='preserve' and mode~='cinema') then return end
+    color_mode=mode;apply_picture_path();publish();color_menu()
+end)
+mp.register_script_message('dcp-color-menu',color_menu)
 local function local_path(path)
     if path:sub(1,8):lower()=='file:///' then
         return (path:sub(9):gsub('%%(%x%x)',function(h)return string.char(tonumber(h,16))end))
@@ -29,7 +81,7 @@ local function failed(reason)
     mp.set_property('stream-open-filename','memory://')
 end
 mp.add_hook('on_load',4,function(hook)
-    current=nil
+    current=nil;file_loaded=false
     mp.set_property_native('user-data/dcp',{})
     local path=candidate(mp.get_property('path',''))
     if not path then return end
@@ -51,15 +103,43 @@ mp.add_hook('on_load',4,function(hook)
                 af[#af+1]={name='lavfi',label='dcp-channels',params={graph=data.audio_pan}}
                 mp.set_property_native('file-local-options/af',af)
             end
+            apply_picture_path()
             mp.set_property('stream-open-filename',data.edl)
-            mp.set_property_native('user-data/dcp',{state='paired',cpl=data.cpl,title=data.title,duration=data.duration,reels=#data.reels,audio_configuration=data.audio_configuration,warnings=data.warnings})
+            publish()
         end)
         if not ok then current=nil;failed(tostring(err):gsub('^.-:%d+: ','')) end
         hook:cont()
     end)
 end)
+-- JPEG2000 software decode can stall the player thread. Keep a bounded queue
+-- before decoder creation, only for composition/direct MXF JPEG2000 playback.
+mp.add_hook('on_preloaded',4,function()
+    local path=local_path(mp.get_property('path',''))
+    if not current and not (path and path:lower():match('%.mxf$')) then return end
+    for _,track in ipairs(mp.get_property_native('track-list',{})) do
+        if track.type=='video' and track.codec=='jpeg2000' then
+            mp.set_property_bool('file-local-options/vd-queue-enable',true)
+            mp.set_property('file-local-options/vd-queue-max-bytes','256MiB')
+            mp.set_property_native('file-local-options/vd-queue-max-samples',8)
+            mp.set_property_native('file-local-options/vd-queue-max-secs',0.35)
+            return
+        end
+    end
+end)
 mp.register_event('file-loaded',function()
-    if not current then return end
+    file_loaded=true;detect_standalone_xyz()
+    if not current or current.standalone then return end
     mp.set_property_native('chapter-list',current.chapters)
     if #current.warnings>0 then mp.osd_message(table.concat(current.warnings,'\n'),8) end
 end)
+
+
+
+
+mp.register_event('end-file',function(e)
+    if e.reason=='redirect' then return end
+    current=nil;file_loaded=false;mp.set_property_native('user-data/dcp',{})
+    mp.set_property_native('user-data/dcp-menu',{})
+end)
+
+mp.observe_property('video-params','native',detect_standalone_xyz)

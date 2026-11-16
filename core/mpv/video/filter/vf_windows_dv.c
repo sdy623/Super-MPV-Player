@@ -28,16 +28,18 @@
 
 #define BATCH 6
 #define READY_CAP (BATCH * 2)
-struct opts { char *dll; char *output_icc; };
+struct opts { char *dll; char *output_icc; bool gpu_float; };
 typedef int (__cdecl *render_fn)(const wdv_frame_v2 *, uint32_t, uint32_t,
                                uint32_t, wdv_output_v2 *, char *, uint32_t);
 typedef void *(__cdecl *create_fn)(void);
 typedef void *(__cdecl *create_hlg_fn)(uint32_t,uint32_t,uint32_t);
 typedef void (__cdecl *destroy_fn)(void*);
 typedef int (__cdecl *render3_fn)(void*,const wdv_frame_v2*,uint32_t,uint32_t,uint32_t,wdv_output_v2*,char*,uint32_t);
+typedef void* (__cdecl *create_gpu6_fn)(void*,uint32_t,uint32_t,uint32_t,uint32_t);
 typedef void* (__cdecl *create_gpu_fn)(void*,uint32_t,uint32_t,uint32_t);
 typedef int (__cdecl *render_gpu_fn)(void*,const wdv_frame_v2*,const wdv_gpu_frame_v5*,uint32_t,uint32_t,uint32_t,wdv_output_v2*,char*,uint32_t);
 struct priv {
+    create_gpu6_fn create_gpu7, create_gpu6; bool job_float; unsigned gpu_transfer;
     create_gpu_fn create_gpu;render_gpu_fn render_gpu;void*gpu_session;
     AVBufferRef *gpu_pool;ID3D11Device *gpu_device;AVRational gpu_fps;unsigned gpu_chroma;
     wdv_gpu_frame_v5 gpu[BATCH];bool job_gpu;unsigned long long gpu_frames;
@@ -55,7 +57,10 @@ struct priv {
     LONG done;
     int rc, job_count, job_w, job_h;
     double render_ms;
-    bool job_ok, job_rpu;
+    double seek_pts;
+    struct mp_image *seek_tail;
+    unsigned long long seek_skipped;
+    bool job_ok, job_rpu, job_fel;
     wdv_frame_v2 input[BATCH];
     wdv_output_v2 output[BATCH];
     struct mp_image *cpu[BATCH], *rgb[BATCH];
@@ -174,7 +179,7 @@ static void finish_batch(struct mp_filter *f)
         for(int y=0;y<h;y++)for(int x=0;x<w;x++)opaque+=rgb[i]->planes[0][y*rgb[i]->stride[0]+x*4+3]!=0;
         if(!opaque){ok=false;snprintf(error,sizeof(p->error),"renderer returned an empty/transparent surface");break;}
     }
-    if (!ok && has_rpu && !p->failed) {
+    if (!ok && has_rpu && !p->job_fel && !p->failed) {
         MP_WARN(f, "Windows DV fallback: %s; original BL/EL and PTS retained.\n", error);
         p->failed = true;
         snprintf(p->last_error,sizeof(p->last_error),"%s",error);
@@ -188,24 +193,29 @@ static void finish_batch(struct mp_filter *f)
             for (int k=0;k<dst->num_ff_side_data;k++) av_buffer_unref(&dst->ff_side_data[k].buf);
             dst->num_ff_side_data=0;
             dst->params.color=pl_color_space_srgb;
+            // FP16 carries extended linear RGB (1.0 = 80 nit), not panel RGB.
+            // Keep negative/over-one values until gpu-next's gamut/tone mapping.
+            if(p->job_float)dst->params.color=(struct pl_color_space){
+                .primaries=PL_COLOR_PRIM_BT_709,.transfer=PL_COLOR_TRC_SCRGB};
             av_buffer_unref(&dst->icc_profile);
-            if(p->output_icc)dst->icc_profile=av_buffer_ref(p->output_icc);
+            if(p->output_icc && !p->job_float)dst->icc_profile=av_buffer_ref(p->output_icc);
             // MediaEngine returns a complete opaque video image, not a compositing layer.
             // Its incidental alpha (e.g. the Dolby notification rectangle) is not coverage.
             // Keep RGB and the empty-surface guard unchanged; do not affect MPV OSD alpha.
             dst->params.repr=(struct pl_color_repr){.sys=PL_COLOR_SYSTEM_RGB,
                 .levels=PL_COLOR_LEVELS_FULL,.alpha=PL_ALPHA_NONE};
             dst->params.primaries_orig=PL_COLOR_PRIM_BT_709;
-            dst->params.transfer_orig=PL_COLOR_TRC_SRGB; dst->params.sys_orig=PL_COLOR_SYSTEM_RGB;
+            dst->params.transfer_orig=p->job_float?PL_COLOR_TRC_SCRGB:PL_COLOR_TRC_SRGB; dst->params.sys_orig=PL_COLOR_SYSTEM_RGB;
             dst->params.no_dovi=true; dst->params.no_enhancement_layer=true;
             p->ready[kept+i]=dst; rgb[i]=NULL; talloc_free(orig);
         } else p->ready[kept+i]=orig;
         mp_image_unrefp(&cpu[i]); mp_image_unrefp(&rgb[i]); p->pending[i]=NULL;
     }
-    p->state=ok?"processed":(has_rpu||p->failed?"fallback":"passthrough");
+    p->state=p->job_fel?"fel-gpu-next":ok?"processed":(has_rpu||p->failed?"fallback":"passthrough");
+    if(p->job_fel){p->failed=false;p->last_error[0]=0;}
     if(ok){if(p->job_gpu)p->gpu_frames+=p->count;p->processed_frames+=p->count;p->failed=false;p->last_error[0]=0;}
-    if (ok) MP_DBG(f,"Windows DV processed %d paired frames %.6f..%.6f in MPV; output SDR BGRA.\n",
-                   p->count,p->ready[kept]->pts,p->ready[kept+p->count-1]->pts);
+    if (ok) MP_DBG(f,"Windows DV processed %d paired frames %.6f..%.6f in MPV; output %s.\n",
+                   p->count,p->ready[kept]->pts,p->ready[kept+p->count-1]->pts,p->job_float?"FP16 scRGB":"SDR BGRA");
     p->ready_count=kept+p->count; p->ready_pos=0; p->count=0;
 }
 
@@ -218,29 +228,53 @@ static void begin_batch(struct mp_filter *f)
     snprintf(p->error,sizeof(p->error),"unsupported frame; original BL/EL retained");
     bool ok = p->render || p->session;
     int w = p->pending[0]->w, h = p->pending[0]->h;
-    bool has_rpu = false;
+    bool has_rpu = false; p->job_fel=false;
     struct mp_image *first=p->pending[0];
-    // Opt in only for the measured high-frame-rate HLG hardware path; P7 stays unchanged.
-    p->job_gpu=p->create_gpu && p->render_gpu && first->imgfmt==IMGFMT_D3D11 && first->params.hw_subfmt==IMGFMT_P010 && first->hwctx && first->params.transfer_orig==PL_COLOR_TRC_HLG && first->nominal_fps>=50;
+    // v6 selects the actual BL transfer; v5 is HLG-only and must never receive PQ.
+    unsigned transfer=first->params.transfer_orig==PL_COLOR_TRC_HLG ? 2 :
+                      first->params.transfer_orig==PL_COLOR_TRC_PQ ? 1 : 0;
+    p->job_gpu=p->render_gpu && (p->create_gpu6 || (p->create_gpu && transfer==2)) &&
+        first->imgfmt==IMGFMT_D3D11 && first->params.hw_subfmt==IMGFMT_P010 &&
+        first->hwctx && transfer && first->nominal_fps>0;
+    // Float output is verified for HLG. Keep established PQ/P7 output unchanged.
+    p->job_float=p->job_gpu && transfer==2 && p->opts->gpu_float && p->create_gpu7;
     if(p->job_gpu){
         AVHWFramesContext *fc=(void*)first->hwctx->data;
         AVHWDeviceContext *dc=(void*)fc->device_ref->data;
         AVD3D11VADeviceContext *dd=dc->hwctx;
         AVRational fps=av_d2q(first->nominal_fps,100000);unsigned chroma=first->params.chroma_location==PL_CHROMA_TOP_LEFT;
-        if(p->gpu_session && (p->gpu_device!=dd->device || av_cmp_q(fps,p->gpu_fps) || chroma!=p->gpu_chroma)){p->destroy3(p->gpu_session);p->gpu_session=NULL;}
-        if(!p->gpu_session){p->gpu_device=dd->device;p->gpu_fps=fps;p->gpu_chroma=chroma;p->gpu_session=p->create_gpu(dd->device,fps.num,fps.den,chroma);}
-        ok=p->gpu_session && mp_update_av_hw_frames_pool(&p->gpu_pool,fc->device_ref,IMGFMT_D3D11,IMGFMT_BGRA,w,h,false);
+        if(p->gpu_session && (p->gpu_device!=dd->device || av_cmp_q(fps,p->gpu_fps) || chroma!=p->gpu_chroma || transfer!=p->gpu_transfer)){p->destroy3(p->gpu_session);p->gpu_session=NULL;}
+        if(!p->gpu_session){p->gpu_device=dd->device;p->gpu_fps=fps;p->gpu_chroma=chroma;p->gpu_transfer=transfer;p->gpu_session=p->job_float ? p->create_gpu7(dd->device,fps.num,fps.den,chroma,transfer) : p->create_gpu6 ? p->create_gpu6(dd->device,fps.num,fps.den,chroma,transfer) : p->create_gpu(dd->device,fps.num,fps.den,chroma);}
+        ok=p->gpu_session && mp_update_av_hw_frames_pool(&p->gpu_pool,fc->device_ref,IMGFMT_D3D11,p->job_float?IMGFMT_RGBAF16:IMGFMT_BGRA,w,h,false);
         if(!ok)snprintf(p->error,sizeof(p->error),"GPU Windows DV session/pool unavailable");
     }
 
     for (int i = 0; ok && i < p->count; i++) {
         struct mp_image *img = p->pending[i], *el = img->enhancement_layer;
-        AVBufferRef *rpu = raw_rpu(el ? el : img);
+        AVBufferRef *rpu = el ? raw_rpu(el) : NULL;
+        if(!rpu)rpu=raw_rpu(img); // Interleaved streams can retain raw RPU on BL.
+        p->paired_el|=!!el;
         // Original BL transfer describes raw P010, unlike effective DV/PQ tags.
         p->source_transfer = img->params.transfer_orig;
         has_rpu |= !!rpu; if(rpu){p->rpu_seen++;p->paired_el|=!!el;}
         bool hlg=img->params.transfer_orig==PL_COLOR_TRC_HLG;
         if (i==0) p->job_hlg=hlg;
+#if PL_API_VER >= 370
+        // Windows accepts BL + RPU, not FEL residual textures. Preserve both
+        // layers for gpu-next's NLQ reconstruction instead of stripping FEL.
+        if (img->params.repr.dovi && img->params.repr.dovi->nlq_active) {
+            p->job_fel=!!el;has_rpu=true;
+            snprintf(p->error,sizeof(p->error),"%s",el?"FEL reconstruction uses gpu-next; Windows BL-only effect cannot consume FEL residual":"FEL residual not paired; original frame retained");
+            ok=false;break;
+        }
+#endif
+        if (rpu && p->job_gpu &&
+            (img->params.primaries_orig!=PL_COLOR_PRIM_BT_2020 ||
+             img->params.sys_orig!=PL_COLOR_SYSTEM_BT_2020_NC ||
+             img->params.repr.levels!=PL_COLOR_LEVELS_LIMITED ||
+             (img->params.chroma_location!=PL_CHROMA_LEFT && img->params.chroma_location!=PL_CHROMA_TOP_LEFT))) {
+            snprintf(p->error,sizeof(p->error),"GPU Windows requires BT2020 NCL limited PQ/HLG input with known chroma siting");ok=false;break;
+        }
         if (rpu && hlg) {
             if (!p->create_hlg || !p->render3 || !p->destroy3 || el ||
                 img->params.primaries_orig!=PL_COLOR_PRIM_BT_2020 ||
@@ -290,6 +324,23 @@ static void begin_batch(struct mp_filter *f)
     InterlockedExchange(&p->done,1);mp_filter_internal_mark_progress(f);
 }
 
+// Decoding pre-roll is still necessary for HEVC references and RPU/EL pairing.
+// Rendering those invisible frames through MediaEngine is not. Keep only the
+// latest one so seeking beyond EOF can still display a correctly rendered tail.
+static bool hold_seek_preroll(struct priv *p, struct mp_image *img)
+{
+    if (p->seek_pts == MP_NOPTS_VALUE) return false;
+    if (img->pts != MP_NOPTS_VALUE && img->pts < p->seek_pts) {
+        mp_image_unrefp(&p->seek_tail);
+        p->seek_tail=img;
+        p->seek_skipped++;
+        return true;
+    }
+    p->seek_pts=MP_NOPTS_VALUE;
+    mp_image_unrefp(&p->seek_tail);
+    return false;
+}
+
 static void process(struct mp_filter *f)
 {
     struct priv *p=f->priv;
@@ -311,13 +362,19 @@ static void process(struct mp_filter *f)
         while(!p->eof&&p->count<BATCH){
             if(!mp_pin_out_request_data(f->ppins[0]))return;
             struct mp_frame fr=mp_pin_out_read(f->ppins[0]);
-            if(fr.type==MP_FRAME_EOF){p->eof=true;break;}
+            if(fr.type==MP_FRAME_EOF){
+                p->eof=true;
+                if(p->seek_tail){p->pending[p->count++]=p->seek_tail;p->seek_tail=NULL;}
+                p->seek_pts=MP_NOPTS_VALUE;
+                break;
+            }
             if(fr.type!=MP_FRAME_VIDEO){mp_frame_unref(&fr);continue;}
+            if(hold_seek_preroll(p,fr.data))continue;
             p->pending[p->count++]=fr.data;
             // Prime MediaEngine with the original batch, then bound HLG main-thread
             // download work to one frame so pause/menu commands are not delayed.
-            if((p->hlg_session || p->gpu_session) && p->processed_frames &&
-               p->pending[p->count-1]->params.transfer_orig==PL_COLOR_TRC_HLG)break;
+            if(p->processed_frames && (p->job_gpu || (p->hlg_session &&
+               p->pending[p->count-1]->params.transfer_orig==PL_COLOR_TRC_HLG)))break;
         }
         if(p->count)begin_batch(f);
     }
@@ -326,6 +383,7 @@ static void process(struct mp_filter *f)
 static void reset(struct mp_filter *f)
 {
     struct priv *p=f->priv;
+    p->seek_pts=MP_NOPTS_VALUE;p->seek_skipped=0;mp_image_unrefp(&p->seek_tail);
     p->rpu_seen=p->processed_frames=p->gpu_frames=0;p->paired_el=false;p->state="waiting";p->last_error[0]=0;
     p->source_transfer=PL_COLOR_TRC_UNKNOWN;
     for(int i=0;i<READY_CAP;i++)mp_image_unrefp(&p->ready[i]);
@@ -342,19 +400,23 @@ static void destroy(struct mp_filter *f)
 }
 static bool command(struct mp_filter *f,struct mp_filter_command *cmd)
 {
+    struct priv *p=f->priv;
+    if(cmd->type==MP_FILTER_COMMAND_SET_SEEK_TARGET){p->seek_pts=cmd->seek_pts;return true;}
     if(cmd->type!=MP_FILTER_COMMAND_GET_META)return false;
-    struct priv *p=f->priv;struct mp_tags *t=talloc_zero(NULL,struct mp_tags);
-    mp_tags_set_str(t,"output-icc",p->profile_path?p->profile_path:"none");
+    struct mp_tags *t=talloc_zero(NULL,struct mp_tags);
+    mp_tags_set_str(t,"seek-preroll-skipped",mp_tprintf(64,"%llu",p->seek_skipped));
+    mp_tags_set_str(t,"output-icc",p->job_float?"none (scRGB)":p->profile_path?p->profile_path:"none");
     mp_tags_set_str(t,"state",p->state?p->state:"waiting");
     mp_tags_set_str(t,"rpu-seen",mp_tprintf(64,"%llu",p->rpu_seen));
     mp_tags_set_str(t,"processed-frames",mp_tprintf(64,"%llu",p->processed_frames));
     mp_tags_set_str(t,"paired-el",p->paired_el?"yes":"no");
+    mp_tags_set_str(t,"enhancement-path",p->job_fel?"gpu-next-fel":"unchanged");
     mp_tags_set_str(t,"bridge-available",p->render?"yes":"no");
     mp_tags_set_str(t,"fallback-reason",p->last_error);
     mp_tags_set_str(t,"source-base-transfer",p->source_transfer == PL_COLOR_TRC_HLG ? "hlg" :
         p->source_transfer == PL_COLOR_TRC_PQ ? "pq" : "other-or-unknown");
     mp_tags_set_str(t,"windows-input-transfer",p->job_hlg?"HLG":"PQ");
-    mp_tags_set_str(t,"output","SDR");
+    mp_tags_set_str(t,"output",p->job_float?"scRGB FP16 (display mapping follows)":"SDR");
     mp_tags_set_str(t,"frame-transport",p->job_gpu?"d3d11-gpu":"cpu-p010-bgra");
     mp_tags_set_str(t,"gpu-frames",mp_tprintf(64,"%llu",p->gpu_frames));
     mp_tags_set_str(t,"last-render-ms",mp_tprintf(64,"%.3f",p->render_ms));
@@ -366,7 +428,7 @@ static const struct mp_filter_info info={.name="windows-dv",.priv_size=sizeof(st
 static struct mp_filter *create(struct mp_filter *parent,void *options)
 {
     struct mp_filter *f=mp_filter_create(parent,&info);if(!f){talloc_free(options);return NULL;}
-    struct priv *p=f->priv;p->opts=talloc_steal(p,options);
+    struct priv *p=f->priv;p->opts=talloc_steal(p,options);p->seek_pts=MP_NOPTS_VALUE;
     if(!load_output_profile(f)){talloc_free(f);return NULL;}
     mp_filter_add_pin(f,MP_PIN_IN,"in");mp_filter_add_pin(f,MP_PIN_OUT,"out");
     const char *path=p->opts->dll;
@@ -377,6 +439,8 @@ static struct mp_filter *create(struct mp_filter *parent,void *options)
         if(p->dll)p->render=(render_fn)GetProcAddress(p->dll,"wdv_render_batch_v2");
     }
     if(p->dll){
+        p->create_gpu7=(create_gpu6_fn)GetProcAddress(p->dll,"wdv_create_gpu_v7");
+        p->create_gpu6=(create_gpu6_fn)GetProcAddress(p->dll,"wdv_create_gpu_v6");
         p->create_gpu=(create_gpu_fn)GetProcAddress(p->dll,"wdv_create_gpu_v5");
         p->render_gpu=(render_gpu_fn)GetProcAddress(p->dll,"wdv_render_gpu_v5");
         p->create_hlg=(create_hlg_fn)GetProcAddress(p->dll,"wdv_create_hlg_v4");
@@ -392,6 +456,6 @@ static struct mp_filter *create(struct mp_filter *parent,void *options)
 #define OPT_BASE_STRUCT struct opts
 const struct mp_user_filter_entry vf_windows_dv={
     .desc={.name="windows-dv",.description="Experimental Windows Dolby processing in MPV window",
-        .priv_size=sizeof(struct opts),.options=(const m_option_t[]){{"dll",OPT_STRING(dll)},{"output-icc",OPT_STRING(output_icc)},{0}}},
+        .priv_size=sizeof(struct opts),.options=(const m_option_t[]){{"dll",OPT_STRING(dll)},{"output-icc",OPT_STRING(output_icc)},{"gpu-float",OPT_BOOL(gpu_float)},{0}}},
     .create=create,
 };

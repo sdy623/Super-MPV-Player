@@ -1034,10 +1034,17 @@ void mp_image_params_guess_csp(struct mp_image_params *params)
     } else if (forced_csp == PL_COLOR_SYSTEM_XYZ) {
         params->repr.sys = PL_COLOR_SYSTEM_XYZ;
         params->repr.levels = PL_COLOR_LEVELS_FULL;
-        // Force gamma to ST428 as this is the only correct for DCDM X'Y'Z'
-        params->color.transfer = PL_COLOR_TRC_ST428;
-        // Don't care about primaries, they shouldn't be used, or if anything
-        // MP_CSP_PRIM_ST428 should be defined.
+        // XYZ is converted to linear RGB by libplacebo. Preserve explicit
+        // working primaries/white point; use wide D65 for colorimetric PC playback.
+        if (params->color.transfer == PL_COLOR_TRC_LINEAR) {
+            if (params->color.primaries == PL_COLOR_PRIM_UNKNOWN)
+                params->color.primaries = PL_COLOR_PRIM_BT_2020;
+        } else {
+            if (params->color.transfer == PL_COLOR_TRC_UNKNOWN)
+                params->color.transfer = PL_COLOR_TRC_ST428;
+            if (params->color.primaries == PL_COLOR_PRIM_UNKNOWN)
+                params->color.primaries = PL_COLOR_PRIM_BT_2020;
+        }
     } else {
         // We have no clue.
         params->repr.sys = PL_COLOR_SYSTEM_UNKNOWN;

@@ -39,3 +39,11 @@ The Windows 2.0.0 release packages the tested integrated core and merged configu
 ## Theme helper and generic display defaults
 
 The source tree excludes prebuilt ziggy executables. File-picker features need the matching official uosc helper in a runtime assembly. Configuration archives are not complete player installers. The open edition defaults to following the display; the optional SDR preset uses a 203-nit reference, not a measured panel luminance. No machine GPU name or personal ICC is imported by this upgrade.
+
+
+## Post-2.0.0 development
+The current source adds explicit PQ/HLG GPU transport, FP16 HLG output, generic
+XYZ/ICM DCP playback and pre-roll-aware DV seeks. It is ahead of the published
+2.0.0 binary. See [candidate status](post-2.0.0-candidate.md) for measured improvements
+and remaining playback failures. Official Dolby dependency detection, separate
+Omniphony/libfreemkv installation and original mapping remain required contracts.

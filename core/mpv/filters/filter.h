@@ -372,6 +372,8 @@ enum mp_filter_command_type {
     MP_FILTER_COMMAND_SET_SPEED_RESAMPLE,
     MP_FILTER_COMMAND_SET_SPEED_DROP,
     MP_FILTER_COMMAND_IS_ACTIVE,
+    // Optional opt-in: discard decoded pre-roll before costly stateless rendering.
+    MP_FILTER_COMMAND_SET_SEEK_TARGET,
 };
 
 struct mp_filter_command {
@@ -390,6 +392,9 @@ struct mp_filter_command {
 
     // For MP_FILTER_COMMAND_IS_ACTIVE
     bool is_active;
+
+    // For MP_FILTER_COMMAND_SET_SEEK_TARGET; already includes hr-seek tolerance.
+    double seek_pts;
 };
 
 // Run a command on the filter. Returns success. For libavfilter.

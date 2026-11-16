@@ -7,9 +7,10 @@ local timer
 local media_active=not mp.get_property_bool('idle-active',true)
 local button_json=''
 local function indicator(hdr,dv,force)
-    local button={icon=hdr and 'hdr_on' or 'hdr_off',active=hdr,
-        badge=dv and 'DV' or nil,
-        tooltip=dv and 'HDR/DV 设置 · 已检测到 Dolby Vision' or
+    local dcp=mp.get_property_native('user-data/dcp',{}).active==true
+    local button={icon=dcp and 'palette' or (hdr and 'hdr_on' or 'hdr_off'),active=hdr or dcp,
+        badge=dcp and 'DCP' or (dv and 'DV' or nil),
+        tooltip=dcp and 'DCP 色彩管理 · XYZ / 系统 ICM' or dv and 'HDR/DV 设置 · 已检测到 Dolby Vision' or
             (hdr and 'HDR/DV 设置 · 已检测到 HDR' or 'HDR/DV 设置 · 当前未检测到 HDR'),
         command={'script-message-to','hdr_controls','menu'}}
     local json=utils.format_json(button)
@@ -62,6 +63,7 @@ local function snapshot()
     if dv and inwindow.source_base_transfer=='hlg' then
         source='Dolby Vision / HLG 基础层'
     end
+    if media_active and mp.get_property_native('user-data/dcp',{}).active==true then source='DCP / XYZ / ST 428' end
     local options={}
     for key in pairs(fields) do options[key]=mp.get_property_native('options/'..key) end
     local result={mode=mode,source=source,source_dv=dv,['source-hdr']=hdr,source_params=src,render_input_params=render,target_params=dst,
@@ -75,8 +77,12 @@ local function snapshot()
 end
 local function apply()
     timer=nil
+    if mp.get_property_native('user-data/dcp',{}).active==true then
+        mp.set_property_bool('file-local-options/icc-profile-auto',true)
+        snapshot();return
+    end
     local inside=mp.get_property_native('user-data/windows-dv-inwindow',{})
-    if inside.windows_processed then
+    if inside.windows_processed and not inside.float_output then
         -- The frame processor returns device-referred SDR RGB with the system ICC.
         -- Keep its matching target profile; do not map that SDR output to HDR again.
         set('target-colorspace-hint','yes');set('target-colorspace-hint-mode','target')
@@ -105,6 +111,7 @@ local function schedule()
     timer=mp.add_timeout(0.08,apply)
 end
 local function menu()
+    if mp.get_property_native('user-data/dcp',{}).active==true then mp.commandv('script-message','dcp-color-menu');return end
     local s=snapshot()
     local native=s.native_backend or {}
     local inside=s.inwindow or {}
@@ -141,7 +148,7 @@ local function menu()
             local selected=actual==value or (tonumber(actual) and tonumber(actual)==tonumber(value))
             sub[#sub+1]={title=value,active=selected,value={'script-message-to','hdr_controls','set',key,value}}
         end
-        local fixed_by_windows=inside.windows_processed and (key=='tone-mapping' or key=='gamut-mapping-mode' or key:match('^hdr%-') or key=='tone-mapping-visualize')
+        local fixed_by_windows=inside.windows_processed and not inside.float_output and (key=='tone-mapping' or key=='gamut-mapping-mode' or key:match('^hdr%-') or key=='tone-mapping-visualize')
         items[#items+1]={id=key,title=labels[key],hint=fixed_by_windows and '先切回原映射再调整' or mp.get_property('options/'..key,''),selectable=not fixed_by_windows,muted=fixed_by_windows,items=sub}
     end
     items[#items+1]={title='重置：跟随显示器默认值',value={'script-message-to','hdr_controls','reset'}}
@@ -167,12 +174,13 @@ mp.register_script_message('reset',function()
     for key,value in pairs(defaults) do if value then set(key,value) end end
     snapshot();schedule();mp.add_timeout(0.12,menu)
 end)
-local processed_before=false
+local processed_before=nil
 mp.observe_property('user-data/windows-dv-inwindow','native',function(_,v)
-    local active=type(v)=='table' and v.windows_processed==true
+    local active=type(v)=='table' and (tostring(v.windows_processed==true)..':'..tostring(v.float_output==true)) or 'false:false'
     if active~=processed_before then processed_before=active;schedule() end
     snapshot()
 end)
+mp.observe_property('user-data/dcp','native',schedule)
 mp.observe_property('video-params','native',schedule)
 mp.observe_property('video-out-params','native',schedule)
 mp.register_event('file-loaded',function()media_active=true;snapshot();schedule()end)

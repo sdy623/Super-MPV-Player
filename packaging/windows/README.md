@@ -18,3 +18,31 @@ Create a separate task directory with `payload/`, `src/`, and `dist/`. Copy `mak
 Use the same portable configuration and plugin sources, Java/BD-J runtime and notices as the candidate manifest. Place the launcher source in `payload/package-source/`. Run `python make-files.py`, then `makensis src/installer.nsi`. It generates per-file install/uninstall lists and rejects bundled Omniphony engine/bridges, the freemkv helper, device profiles and known private-data filenames. Fresh-install verification must compare the effective payload and exercise launch/upgrade/uninstall; do not treat compilation alone as playback validation.
 
 The NSIS `TESTMODE` switch writes shortcuts inside the test installation and avoids production shortcut/registry changes. The public installer requires an ASCII installation directory for this Java/BD-J combination. It does not change file associations or start playback automatically.
+
+## Post-2.0.0 source candidate: patched libplacebo
+
+This branch now requires libplacebo 7.387.0 and the checked-in XYZ patch. The existing
+2.0.0 release and its dependency manifest remain historical; candidate replacements
+are listed in `docs/post-2.0.0-dependencies.json`.
+
+In your build workspace, check out https://github.com/haasn/libplacebo at
+`275f7dea27924cdd34ab2e6c20e448b6bc4fab65`. Apply
+`packaging/windows/patches/libplacebo-7.387-xyz.patch` from the libplacebo source
+root with `git apply --check <patch>` followed by `git apply <patch>`.
+Build/install it with your UCRT64 compiler:
+
+```powershell
+meson setup <build-dir> <source-dir> --prefix=<install-prefix> --buildtype=release -Ddefault_library=shared -Dd3d11=enabled -Dopengl=enabled -Dvulkan=disabled -Dlcms=enabled -Ddovi=enabled -Dshaderc=enabled -Dglslang=disabled
+meson compile -C <build-dir>
+meson install -C <build-dir>
+./packaging/windows/Build-Core.ps1 -LibplaceboPrefix <install-prefix> -BuildDir <mpv-build-dir>
+```
+
+Install the **patched** `libplacebo-387.dll` beside each resulting MPV executable.
+Do not replace it with the unpatched compiler-environment DLL while staging.
+The tested Windows candidate uses D3D11/OpenGL; Vulkan is disabled in this build.
+The generic XYZ path needs both the MPV and libplacebo changes. It is not a
+standalone Lua configuration fix. No title/CPL exceptions are shipped.
+
+This source commit is not a new installer release. Playback acceptance and the
+remaining pause/resume drops are recorded in `docs/post-2.0.0-candidate.md`.

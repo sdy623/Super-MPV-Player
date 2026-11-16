@@ -440,6 +440,17 @@ static void mp_seek(MPContext *mpctx, struct seek_params seek)
         // allow decoder to drop frames before hrseek_pts
         bool hrseek_framedrop = !hr_seek_very_exact && opts->hr_seek_framedrop;
 
+        // Hardware decoders may still emit GOP pre-roll. Opt-in expensive video
+        // filters can skip rendering it after decode; no packet/RPU/EL is lost
+        // from the decoder. Backstep/very-exact/no-framedrop retain old behavior.
+        if (hrseek_framedrop && mpctx->play_dir > 0 && mpctx->vo_chain) {
+            struct mp_filter_command cmd = {
+                .type = MP_FILTER_COMMAND_SET_SEEK_TARGET,
+                .seek_pts = mpctx->hrseek_pts - .005,
+            };
+            mp_output_chain_command(mpctx->vo_chain->filter, "all", &cmd);
+        }
+
         MP_VERBOSE(mpctx, "hr-seek, skipping to %f%s%s\n", mpctx->hrseek_pts,
                    hrseek_framedrop ? "" : " (no framedrop)",
                    mpctx->hrseek_backstep ? " (backstep)" : "");

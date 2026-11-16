@@ -1,0 +1,18 @@
+{
+  "base_release_manifest": "native-dependency-sources.json",
+  "replacement": {
+    "file": "libplacebo-387.dll",
+    "source": "https://github.com/haasn/libplacebo",
+    "commit": "275f7dea27924cdd34ab2e6c20e448b6bc4fab65",
+    "version": "7.387.0",
+    "patch": "packaging/windows/patches/libplacebo-7.387-xyz.patch",
+    "features": {
+      "d3d11": true,
+      "opengl": true,
+      "vulkan": false,
+      "lcms": true,
+      "dovi": true
+    }
+  },
+  "scope": "Source candidate; no new public package or binary redistribution in this commit"
+}

@@ -1,7 +1,7 @@
 -- Truthful UI for the in-window Windows frame processor. Not an HDR-output claim.
 local mp=require 'mp'
 local utils=require 'mp.utils'
-local options={auto_enable=true}
+local options={auto_enable=true,gpu_float=true}
 require('mp.options').read_options(options,'native_dv_controls')
 local source=debug.getinfo(1,'S').source:sub(2)
 local directory=source:match('^(.*)[/\\]')
@@ -43,13 +43,15 @@ local function update()
  local seen=tonumber(meta['rpu-seen']) or 0
  local frames=tonumber(meta['processed-frames']) or 0
  local dv=seen>0 or src.colormatrix=='dolbyvision' or out.colormatrix=='dolbyvision'
- local gpu_output=out.pixelformat=='d3d11' and out['hw-pixelformat']=='bgra' and meta['frame-transport']=='d3d11-gpu' and (tonumber(meta['gpu-frames']) or 0)>0
+ local gpu_output=out.pixelformat=='d3d11' and (out['hw-pixelformat']=='bgra' or out['hw-pixelformat']=='rgbaf16') and meta['frame-transport']=='d3d11-gpu' and (tonumber(meta['gpu-frames']) or 0)>0
  local processed=on and frames>0 and (out.pixelformat=='bgra' or gpu_output) and (meta.state=='processed' or meta.state=='processing')
  local state=not on and 'off' or (meta.state or 'waiting')
  local hlg=meta['source-base-transfer']=='hlg'
  if meta['source-base-transfer'] and meta['source-base-transfer']~='other-or-unknown' then known_hlg=hlg end
  local text,kind
- if processed then text=(hlg and 'DV/HLG' or 'DV')..' | Windows处理 → SDR';kind='windows-sdr'
+ if mp.get_property_native('user-data/dcp',{}).active==true then text='DCP XYZ | gpu-next → SDR';kind='dcp-xyz';state='disabled-for-dcp'
+ elseif on and state=='fel-gpu-next' then text='DV FEL | gpu-next → SDR';kind='gpu-next-fel'
+ elseif processed then text=(hlg and 'DV/HLG' or 'DV')..' | Windows处理 → SDR';kind='windows-sdr'
  elseif on and dv and hlg and state=='fallback' then text='DV/HLG | gpu-next → SDR';kind='gpu-next-hlg'
  elseif on and state=='fallback' then text=(dv and 'DV | ' or '')..'已回退至原映射';kind='fallback'
  elseif on and dv then text='DV | Windows准备中';kind='pending'
@@ -58,7 +60,7 @@ local function update()
  elseif available then text='Windows DV实验 | 未启用';kind='off'
  else text='';kind='none' end
  status={dependency=dependency,executable_directory=exe_directory,available=available,enabled=on,state=state,source_dv=dv,windows_processed=processed,
-  processed_frames=frames,rpu_seen=seen,paired_el=meta['paired-el']=='yes',
+  float_output=processed and out['hw-pixelformat']=='rgbaf16',processed_frames=frames,rpu_seen=seen,paired_el=meta['paired-el']=='yes',
   source_base_transfer=meta['source-base-transfer'] or '',
   fallback_reason=meta['fallback-reason'] or '',badge=text,badge_kind=kind,
   physical_dv_hdr_output=false,output='SDR',experimental=true}
@@ -67,11 +69,12 @@ local function update()
 
 end
 local function set_enabled(wanted)
+ if wanted and (mp.get_property_native('user-data/dcp',{}).active==true or mp.get_property('video-params/colormatrix')=='xyz') then update();return end
  if wanted and not available then mp.osd_message('Windows DV 依赖尚未就绪：'..tostring(dependency.state)..'；请通过 Microsoft Store 或设备厂商安装兼容扩展',4);return end
  local refresh=wanted and not enabled() and known_hlg and mp.get_property_bool('pause',false)
  local at=refresh and mp.get_property_number('time-pos')
  local ok,err=true,nil
- if wanted and not enabled() then ok,err=mp.commandv('vf','add','@'..label..':windows-dv=dll=%'..#dll..'%'..dll..(dependency.output_icc and dependency.output_icc~='' and ':output-icc=%'..#dependency.output_icc..'%'..dependency.output_icc or ''))
+ if wanted and not enabled() then ok,err=mp.commandv('vf','add','@'..label..':windows-dv=dll=%'..#dll..'%'..dll..(dependency.output_icc and dependency.output_icc~='' and ':output-icc=%'..#dependency.output_icc..'%'..dependency.output_icc or '')..(options.gpu_float and ':gpu-float=yes' or ''))
  elseif not wanted and enabled() then ok,err=mp.commandv('vf','remove','@'..label) end
  if ok and at then mp.commandv('seek',at,'absolute+exact') end
  if not ok then mp.osd_message('Windows处理切换失败：'..tostring(err),4) end
@@ -85,6 +88,7 @@ mp.register_script_message('windows-dv-inwindow-disable',function()set_enabled(f
 mp.register_script_message('windows-dv-inwindow-status',update)
 mp.observe_property('video-out-params','native',update)
 mp.observe_property('vf','native',update)
+mp.observe_property('user-data/dcp','native',update)
 mp.observe_property('osd-dimensions','native',update)
 mp.add_periodic_timer(.25,update)
 -- The experimental executable is a clearly separated opt-in entry.

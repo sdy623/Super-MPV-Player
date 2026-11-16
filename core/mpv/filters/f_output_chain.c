@@ -527,7 +527,9 @@ bool mp_output_chain_command(struct mp_output_chain *c, const char *target,
     if (!target || !target[0])
         return false;
 
-    if (strcmp(target, "all") == 0 && cmd->type == MP_FILTER_COMMAND_TEXT) {
+    if (strcmp(target, "all") == 0 &&
+        (cmd->type == MP_FILTER_COMMAND_TEXT ||
+         cmd->type == MP_FILTER_COMMAND_SET_SEEK_TARGET)) {
         // (Following old semantics.)
         for (int n = 0; n < p->num_user_filters; n++)
             mp_filter_command(p->user_filters[n]->f, cmd);
