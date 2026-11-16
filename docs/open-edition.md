@@ -19,6 +19,14 @@ The player includes the integration, not the engine or decoder bridge DLLs. They
 
 The upstream loader's behavior is preserved: without an explicit library override, a compatible Studio-deployed engine is preferred. The installer does not replace or reconfigure Studio. Missing or incompatible components keep the original audio decoder. Headphone rendering should not be stacked unintentionally with Windows headphone spatial rendering. PCM/DCP keeps its original decoder. Neither video mode changes audio mode nor audio mode changes video mode.
 
+## libfreemkv: user-managed optional backend
+
+The installer does not include libfreemkv, a native freemkv bridge executable, KEYDB, certificates or activation data. The user handles installation, licensing, keys and updates. See the [maintainer documentation](https://freemkv.org/docs/aacs/).
+
+To use the existing plugin interface, set `freemkv_path` in `portable_config/script-opts/bluray.conf` to an independently installed compatible `mpv-freemkv-bridge.exe`. The helper must implement the plugin's `serve --source --state-file --stop-file` interface; a standalone libfreemkv DLL or unrelated CLI is not interchangeable. The upstream site is documentation, not a claim that it distributes this custom helper. `freemkv_keydb` is an optional user-managed local path; no database is supplied or downloaded by the installer.
+
+Without the helper, that backend reports unavailable. Decrypted BDMV playback and menus, libaacs, and detection of an installed MakeMKV remain available independently. Xreveal instance detection still disables player-side decryption. This helper is a sequential bridge, not a replacement for the local Blu-ray menu/timeline path.
+
 ## Build and release status
 The exact integrated MPV source is in `core/mpv`; upstream revision pins are in `sources.lock.json`. Existing UI/config and plugin submodules are retained. Native bridge source is in `windows/native-dv`. See its build.cmd and RPU adapter instructions; Visual Studio and Windows SDK are build dependencies, not redistribution payloads.
 
