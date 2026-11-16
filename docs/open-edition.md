@@ -1,4 +1,4 @@
-# Open edition: source preview
+# Open edition: Windows release candidate
 
 Video and audio are independent choices. Windows Dolby video processing may run together with Omniphony object audio. Omniphony does not implement Dolby Vision video.
 
@@ -27,10 +27,14 @@ To use the existing plugin interface, set `freemkv_path` in `portable_config/scr
 
 Without the helper, that backend reports unavailable. Decrypted BDMV playback and menus, libaacs, and detection of an installed MakeMKV remain available independently. Xreveal instance detection still disables player-side decryption. This helper is a sequential bridge, not a replacement for the local Blu-ray menu/timeline path.
 
+## Original-mapping entry point
+
+The public candidate uses the same source-backed integrated core for its original-mapping entry point, running from the separate `original-backend` directory. Windows Dolby processing remains unavailable in that instance; MPV handles normal video mapping. It does not redistribute the old third-party static MPV build. Existing local player installations and rollback copies are not replaced by this packaging change.
+
 ## Build and release status
 The exact integrated MPV source is in `core/mpv`; upstream revision pins are in `sources.lock.json`. Existing UI/config and plugin submodules are retained. Native bridge source is in `windows/native-dv`. See its build.cmd and RPU adapter instructions; Visual Studio and Windows SDK are build dependencies, not redistribution payloads.
 
-This is a source preview, not an upgraded NSIS release. Still required before binary publication: complete reproducible dependency build, portable display defaults, full package license inventory, integrated UI/runtime tests, and antivirus review. The previous local playback evidence does not validate a new build. Do not redistribute the old local installer as this open edition.
+The Windows 2.0.0-rc3 candidate packages the tested integrated core and merged configuration. See [verification and limitations](release-2.0.0-rc3.md), [assembly instructions](../packaging/windows/README.md), and [exact native dependency sources](native-dependency-sources.json). The companion source archive includes the integrated sources, submodule sources, pinned RPU dependency and required ASIO headers. Vendor runtime notices and source-availability information remain in the installer. Fresh full dependency recompilation and bit-identical reproduction were not performed during packaging. Antivirus vendor review remains pending; functional launch success is not a clean antivirus verdict.
 
 ## Theme helper and generic display defaults
 

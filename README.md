@@ -1,8 +1,8 @@
-# MPV Open Edition — 开放版开发分支
+# MPV Complete — 综合播放器开放版
 
 保留原主题、蓝光插件、章节与时间轴。Windows DV 视频处理和 Omniphony 对象音频分别选择，可同时使用。
 
-目前是源码预览；新版 NSIS 尚未发布。官方 Dolby 组件由用户从 Microsoft Store／设备厂商安装，检测通过后才尝试处理。安装存在不等于渲染成功。
+Windows 安装包与配套源码通过 [GitHub Releases](https://github.com/sdy623/mpv.config/releases) 提供；当前为 2.0.0-rc3 候选版。官方 Dolby 组件由用户从 Microsoft Store／设备厂商安装，检测通过后才尝试处理。安装存在不等于渲染成功。
 
 [开放版状态与依赖说明](docs/open-edition.md)
 

@@ -13,5 +13,8 @@
   "ffmpeg": "9.0.2",
   "libplacebo": "7.360.1",
   "dovi_tool": "614c816b6446dcd1dbaf433403d499a6026fbb5a",
-  "release_status": "source-candidate-not-runtime-release"
+  "release_status": "windows-runtime-candidate",
+  "runtime_candidate": "2.0.0-rc3",
+  "configuration_merge": "e684f8c0137c2dc51f9cff32f0fed3d9255a1e15",
+  "bluray_plugin": "12487ef077f42c417c56e74f09304e4273c6fac4"
 }
