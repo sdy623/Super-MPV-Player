@@ -4,17 +4,49 @@ const { execSync } = require("child_process");
 const { ZipArchive } = require("archiver");
 
 // ---------- 配置 ----------
-const BASE_SRC = "src"; // 所有源文件位于此目录
-const SKINS = ["uosc"]; // Independent plugin menus require uosc.
-const MENU_CONFIGS = [
-  { suffix: "default", file: "menu-default.conf" },
-  { suffix: "macos-white", file: "menu-macos-white.conf" },
-  { suffix: "macos-dark", file: "menu-macos-dark.conf" },
+const BASE_SRC = "src";
+const SKINS = ["uosc"];
+const { stagePlugins } = require("./tools/stage-plugins");
+
+/**
+ * INPUT_CONFIGS 说明：
+ *   - suffix:  打包产物的后缀（<skin>_<suffix>.zip）
+ *   - file:    src 根目录下的 input 配置文件
+ *   - mpvConf: 可选。若非空，则插入到 mpv.conf 文件最前面
+ *
+ * 每个变体会把对应的 input 配置文件复制到打包临时目录根，
+ * 并重命名为 input.conf，与 mpv.conf 处于同一目录。
+ */
+const INPUT_CONFIGS = [
+  // 默认中文版
+  {
+    suffix: "zh",
+    file: "input.conf",
+    mpvConf: `script-opts=modernz-language="zh",uosc-languages="zh-hans",uosc-controls="play-pause,menu,gap,subtitles,<has_many_audio>audio,<has_many_video>video,<has_many_edition>editions,<stream>stream-quality,button:danmaku,button:danmaku_menu,cycle:toggle_on:show_danmaku@uosc_danmaku:on=toggle_on/off=toggle_off?弹幕开关,gap,space,speed,space,shuffle,loop-playlist,loop-file,toggle:push_pin:ontop,gap,prev,items,next,gap,fullscreen"`,
+  },
+  {
+    suffix: "zh-TW",
+    file: "input_zh-TW.conf",
+    mpvConf: `script-opts=modernz-language="zh-TW",uosc-languages="zh-TW",uosc-controls="play-pause,menu,gap,subtitles,<has_many_audio>audio,<has_many_video>video,<has_many_edition>editions,<stream>stream-quality,button:danmaku,button:danmaku_menu,cycle:toggle_on:show_danmaku@uosc_danmaku:on=toggle_on/off=toggle_off?彈幕開關,gap,space,speed,space,shuffle,loop-playlist,loop-file,toggle:push_pin:ontop,gap,prev,items,next,gap,fullscreen"`,
+  },
+  // 英文版
+  {
+    suffix: "en",
+    file: "input_en.conf",
+    mpvConf: `script-opts=modernz-language=en,uosc-languages=en`,
+  },
+  // 按需继续添加，例如：
+  // {
+  //   suffix: "jp",
+  //   file: "input_jp.conf",
+  //   mpvConf: "script-opts = modernz-language=jp,uosc-languages=jp",
+  // }
 ];
+
 const COMMON_DIR = path.join(BASE_SRC, "common");
 const OUTPUT_DIR = "dist";
-const ROOT_FILES = ["mpv.conf", "input.conf"]; // 这些文件也在 src 根目录下
-const { stagePlugins } = require("./tools/stage-plugins");
+// input.conf 已由 INPUT_CONFIGS 处理，这里只保留其它根文件
+const ROOT_FILES = ["mpv.conf"];
 
 // ---------- 获取版本号 ----------
 function getVersion() {
@@ -59,7 +91,6 @@ async function build() {
   await fs.ensureDir(OUTPUT_DIR);
   await fs.emptyDir(OUTPUT_DIR);
 
-  // 检查源目录是否存在
   if (!(await fs.pathExists(BASE_SRC))) {
     console.error(
       `❌ 源目录 "${BASE_SRC}" 不存在！请确保所有源文件已放入 src/ 目录。`
@@ -67,7 +98,6 @@ async function build() {
     process.exit(1);
   }
 
-  // 检查皮肤目录
   for (const skin of SKINS) {
     const skinPath = path.join(BASE_SRC, skin);
     if (!(await fs.pathExists(skinPath))) {
@@ -77,12 +107,12 @@ async function build() {
   }
 
   for (const skin of SKINS) {
-    for (const menu of MENU_CONFIGS) {
-      const suffix = menu.suffix;
-      const menuFile = path.join(BASE_SRC, menu.file); // 菜单配置也在 src 下
+    for (const inputCfg of INPUT_CONFIGS) {
+      const { suffix, file: inputFileName, mpvConf } = inputCfg;
+      const inputFile = path.join(BASE_SRC, inputFileName);
 
-      if (!(await fs.pathExists(menuFile))) {
-        console.warn(`⚠️  跳过 ${skin}_${suffix}：${menuFile} 不存在`);
+      if (!(await fs.pathExists(inputFile))) {
+        console.warn(`⚠️  跳过 ${skin}_${suffix}：${inputFile} 不存在`);
         continue;
       }
 
@@ -94,51 +124,67 @@ async function build() {
         // 1. 复制皮肤
         await fs.copy(skinSrc, tempDir);
 
-        // 2. 合并 common
+        // 2. 合并 common（先铺 common，再用皮肤内容覆盖）
         if (await fs.pathExists(COMMON_DIR)) {
-          await fs.copy(COMMON_DIR, tempDir, { overwrite: true });
+          const skinBackup = `${tempDir}_skin_backup`;
+
+          // 2.1 暂存已复制的皮肤内容
+          await fs.move(tempDir, skinBackup, { overwrite: true });
+
+          // 2.2 以 common 作为基底
+          await fs.copy(COMMON_DIR, tempDir);
+
+          // 2.3 用皮肤内容覆盖 common
+          await fs.copy(skinBackup, tempDir, { overwrite: true });
+
+          // 2.4 清理暂存目录
+          await fs.remove(skinBackup);
         }
 
-        // 3. 创建 script-opts
-        const scriptOptsDir = path.join(tempDir, "script-opts");
-        await fs.ensureDir(scriptOptsDir);
-
-        // 4. 复制菜单配置
-        await fs.copy(menuFile, path.join(scriptOptsDir, "menu_style.conf"), {
+        // 3. 复制 input 配置，并重命名为 input.conf
+        //    与 mpv.conf 同目录（临时目录根）
+        await fs.copy(inputFile, path.join(tempDir, "input.conf"), {
           overwrite: true,
         });
+        console.log(`   🔄 ${inputFileName} → input.conf`);
 
-        // 5. 复制根目录的 mpv.conf 和 input.conf（现在也在 src 下）
-        for (const file of ROOT_FILES) {
-          const srcFile = path.join(BASE_SRC, file);
-          if (await fs.pathExists(srcFile)) {
-            await fs.copy(srcFile, path.join(tempDir, file), {
-              overwrite: true,
-            });
-          } else {
+        // 4. 处理根目录的其它配置文件（mpv.conf 等）
+        //    对 mpv.conf 特殊处理：若当前变体带 mpvConf 字段，
+        //    读取原文件后把该内容插到最前面。
+        for (const f of ROOT_FILES) {
+          const srcFile = path.join(BASE_SRC, f);
+          const destFile = path.join(tempDir, f);
+
+          if (!(await fs.pathExists(srcFile))) {
             console.warn(`⚠️  源目录缺少 ${srcFile}，将跳过`);
+            continue;
+          }
+
+          if (f === "mpv.conf" && mpvConf) {
+            const original = await fs.readFile(srcFile, "utf8");
+            const merged = mpvConf + "\n" + original;
+            await fs.writeFile(destFile, merged);
+            console.log(`   🔄 在 mpv.conf 最前面插入: ${mpvConf}`);
+          } else {
+            await fs.copy(srcFile, destFile, { overwrite: true });
           }
         }
 
-        // Source-only submodule snapshots; no .venv, databases, cache or .git.
         await stagePlugins(tempDir);
-        for (const file of ["LICENSE.LGPL", "LICENSE.integration", "FORK.md", "Setup-Plugins.ps1"]) {
-          await fs.copy(file, path.join(tempDir, file));
-        }
-
-        // 6. 写入 config-version
+        for (const notice of ["LICENSE.LGPL", "LICENSE.integration", "FORK.md", "Setup-Plugins.ps1"]) await fs.copy(notice, path.join(tempDir, notice));
+        // 5. 写入 config-version
         await fs.writeFile(
           path.join(tempDir, "config-version"),
           version + "\n"
         );
 
-        // 7. 打包
+        // 6. 打包
         const zipName = `${skin}_${suffix}.zip`;
         const zipPath = path.join(OUTPUT_DIR, zipName);
         await createZip(tempDir, zipPath);
         console.log(`✅ 生成 ${zipName}`);
 
-        // 8. 清理
+        // 7. 清理
         await fs.remove(tempDir);
       } catch (err) {
         console.error(`❌ 处理 ${skin}_${suffix} 失败:`, err);

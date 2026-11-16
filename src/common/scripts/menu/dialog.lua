@@ -7,7 +7,7 @@ local msg = require('mp.msg')
 
 -- user options
 local o = {
-    video_exts = '*.mp4;*.m4v;*.mkv;*.h264;*.h265;*.m2ts;*.mpeg;*.wmv;*.webm;*.avi;*.flv;*.mov;*.rm;*.rmvb;*.3gp',
+    video_exts = '*.mp4;*.m4v;*.mkv;*.h264;*.h265;*.m2ts;*.mpeg;*.wmv;*.webm;*.avi;*.flv;*.mov;*.rm;*.rmvb;*.3gp;*.ts;*.mts;*.hevc;*.mmts;*.mmt;*.tlv',
     audio_exts = '*.mp3;*.m4a;*.aac;*.flac;*.ac3;*.ogg;*.wav;*.dts;*.tta;*.amr;*.ape;*.wv;*.mka;*.weba;*.wma;*.f4a',
     image_exts = '*.jpg;*.jpeg;*.bmp;*.png;*.apng;*.gif;*.tiff;*.webp',
     subtitle_exts = '*.srt;*.ass;*.idx;*.sub;*.sup;*.txt;*.ssa;*.smi;*.mks',
@@ -39,8 +39,7 @@ end
 
 -- open bluray iso or dir
 local function open_bluray(path)
-    mp.commandv('set', 'bluray-device', path)
-    mp.commandv('loadfile', 'bd://')
+    mp.commandv('script-message-to', 'disc_tools', 'play-disc', path)
 end
 
 -- open dvd iso or dir

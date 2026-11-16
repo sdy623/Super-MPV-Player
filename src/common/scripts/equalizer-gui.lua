@@ -1,13 +1,13 @@
 -- [[
---  名称: mpv-equalizer-gui (全功能持久化自动保存版 - 含极简开关)
---  特性: 1080p-4K自适应、uosc风格推子、胶囊开关、配置自动保存与启动自动加载
+--  名称: mpv-equalizer-gui (全功能持久化自动保存版 - 含极简开关 + 预设下拉)
+--  特性: 1080p-4K自适应、uosc风格推子、胶囊开关、常用EQ预设下拉、配置自动保存与启动自动加载
 -- ]]
 
 local mp = require("mp")
 local utils = require("mp.utils")
 
 -- EQ 总开关状态 (默认开启)
-local eq_enabled = true
+local eq_enabled = false
 
 
 -- 音频声道模式
@@ -15,9 +15,10 @@ local eq_enabled = true
 -- stereo = 立体声
 -- left   = 左声道
 -- right  = 右声道
-local channel_mode = "auto"
+local channel_mode = "system"
 
 local channel_mode_labels = {
+    system = "System",
     auto = "Auto",
     stereo = "Stereo",
     left = "Left",
@@ -38,6 +39,45 @@ local bands = {
     { label = "16k",  freq = "16000", val = 0 }
 }
 
+-- ============================================================
+-- 常用 EQ 预设 (增益单位 dB, 顺序对应 bands 10 段)
+-- 31.5 / 63 / 125 / 250 / 500 / 1k / 2k / 4k / 8k / 16k
+-- ============================================================
+local presets = {
+    { name = "平直 Flat",         vals = {  0,   0,   0,   0,   0,   0,   0,   0,   0,   0 } },
+    { name = "流行 Pop",          vals = { -1,   2,   4,   5,   3,   0,  -1,  -1,   1,   2 } },
+    { name = "摇滚 Rock",         vals = {  5,   4,   2,   0,  -1,  -1,   1,   3,   4,   5 } },
+    { name = "爵士 Jazz",         vals = {  3,   2,   1,   2,  -1,  -1,   0,   1,   2,   3 } },
+    { name = "古典 Classical",    vals = {  4,   3,   2,   1,  -1,  -1,   0,   2,   3,   4 } },
+    { name = "舞曲 Dance",        vals = {  6,   5,   3,   0,   0,  -2,  -3,  -2,   1,   2 } },
+    { name = "嘻哈 Hip-Hop",      vals = {  5,   4,   2,   3,  -1,  -1,   1,  -1,   2,   3 } },
+    { name = "人声 Vocal",        vals = { -3,  -2,  -1,   1,   4,   5,   4,   2,   0,  -1 } },
+    { name = "低音增强 Bass",     vals = {  7,   6,   5,   3,   1,   0,   0,   0,   0,   0 } },
+    { name = "高音增强 Treble",   vals = {  0,   0,   0,   0,   0,   1,   3,   5,   6,   7 } },
+    { name = "响度 Loudness",     vals = {  6,   4,   0,  -1,  -2,  -1,   0,   2,   5,   6 } },
+    { name = "原声 Acoustic",     vals = {  3,   3,   2,   1,   1,   1,   2,   3,   3,   2 } },
+    { name = "金属 Metal",        vals = {  5,   4,   3,   0,  -2,  -1,   1,   3,   5,   6 } },
+    { name = "电子 Electronic",   vals = {  4,   3,   2,   0,  -2,   2,   1,   2,   4,   5 } },
+}
+
+-- 当前选中的预设索引 (nil = 自定义)
+local current_preset = nil
+
+-- 通过当前曲线反查匹配的预设 (允许 ±0.01 浮点误差)
+local function detect_preset()
+    for i, p in ipairs(presets) do
+        local match = true
+        for j = 1, #bands do
+            if math.abs(bands[j].val - p.vals[j]) > 0.01 then
+                match = false
+                break
+            end
+        end
+        if match then return i end
+    end
+    return nil
+end
+
 -- 配置文件存储路径解析 (使用 mpv 标准 expand-path 接口)
 local CONFIG_PATH = mp.command_native({"expand-path", "~~/script-opts/equalizer-gui.json"})
 local ALT_CONFIG_PATH = mp.command_native({"expand-path", "~~/equalizer-gui.json"})
@@ -46,24 +86,30 @@ local overlay = mp.create_osd_overlay("ass-events")
 local is_visible = false
 
 -- 基准虚拟画布尺寸
-local BASE_W, BASE_H = 1280, 720
+local BASE_W = 1280
 local PANEL_W, PANEL_H = 680, 380
+
+-- 预设下拉列表项高度与内边距
+local PRESET_ITEM_H = 22
+local PRESET_PAD = 4
 
 local ui = {
     px = 0, py = 0,
     dragging_band = nil,
     hover_band = nil,
-    selected_band = 1
+    selected_band = 1,
+    preset_open = false
 }
 
 local mouse = { x = 0, y = 0, vx = 0, vy = 0, down = false }
 
--- 按钮组件配置 (添加 toggle 开关)
+-- 按钮组件配置 (添加 toggle 开关 + preset 下拉)
 local btns = {
     reset  = { label = "重置 (Reset)", x = 0, y = 0, w = 110, h = 36, radius = 18 },
     save   = { label = "保存（Save）", x = 0, y = 0, w = 110, h = 36, radius = 18 },
     close  = { label = "✕",           x = 0, y = 0, w = 32,  h = 32, radius = 16 },
-    toggle = { label = "",            x = 0, y = 0, w = 44,  h = 22, radius = 11 }
+    toggle = { label = "",            x = 0, y = 0, w = 44,  h = 22, radius = 11 },
+    preset = { label = "",            x = 0, y = 0, w = 160, h = 36, radius = 18 }
 }
 
 -- ASS 颜色定义
@@ -96,11 +142,34 @@ end
 
 -- 应用音频 EQ + 声道模式到 mpv 引擎
 local function apply_audio_eq()
-    -- Auto：由 mpv 自动决定；
-    -- Stereo / Left / Right：最终输出为立体声。
+    -- mpv 的这些属性可能在文件切换/解码器初始化期间暂时不可用。
+    local codec = (mp.get_property("audio-codec-name") or ""):lower()
+    -- mp.get_property() 返回字符串；某些 mpv 版本/属性可能返回带单位或非纯数字文本。
+    -- tonumber() 只传一个参数，并先校验采样率，避免把字符串误当作进制参数。
+    local sample_rate_text = mp.get_property("audio-params/samplerate")
+    local sample_rate = tonumber(sample_rate_text)
+    if not sample_rate and sample_rate_text then
+        sample_rate = tonumber(tostring(sample_rate_text):match("(%d+)"))
+    end
+    local replaygain = (mp.get_property("replaygain") or "no"):lower()
+
+    -- DSD 不经过 lavfi EQ，避免将原生 DSD 强制转换为 PCM。
+    -- 仍保留用户明确选择的 Left / Right 声道模式。
+    local is_dsd = codec:find("dsd", 1, true) ~= nil
+    if is_dsd then
+        local channel_filter = get_channel_filter()
+        if channel_filter then
+            mp.commandv("af", "set", "@eq_gui:lavfi=[" .. channel_filter .. "]")
+        else
+            mp.commandv("af", "remove", "@eq_gui")
+        end
+        return
+    end
+
+    -- Auto：由 mpv 自动决定；Stereo / Left / Right：最终输出为立体声。
     if channel_mode == "auto" then
         mp.set_property("audio-channels", "auto")
-    else
+    elseif channel_mode ~= "system" then
         mp.set_property("audio-channels", "stereo")
     end
 
@@ -117,13 +186,45 @@ local function apply_audio_eq()
     end
 
     local filters = {}
-    for _, b in ipairs(bands) do
-        table.insert(filters, string.format("equalizer=f=%s:width_type=o:w=1:g=%.1f", b.freq, b.val))
+    local max_positive_gain = 0
+    local nyquist = sample_rate and sample_rate > 0 and sample_rate / 2 or nil
+
+    -- 低采样率下跳过超过奈奎斯特频率的频段；未知采样率时保守跳过 16k。
+    for i, b in ipairs(bands) do
+        local freq = tonumber(b.freq)
+        local above_nyquist = nyquist and freq and freq >= nyquist
+        local low_rate_16k = sample_rate and sample_rate < 44100 and i == #bands
+        local unsafe_unknown_rate = (not nyquist) and i == #bands
+        if not above_nyquist and not low_rate_16k and not unsafe_unknown_rate then
+            table.insert(filters, string.format(
+                "equalizer=f=%s:width_type=o:w=1:g=%.1f", b.freq, b.val))
+            if b.val > max_positive_gain then
+                max_positive_gain = b.val
+            end
+        end
+    end
+
+    -- Headroom：根据最大正增益预先衰减，避免 EQ 产生数字削波。
+    -- ReplayGain 开启时额外留出 6 dB 余量，避免与 ReplayGain 的增益叠加。
+    local rg_enabled = replaygain ~= "no" and replaygain ~= "false"
+        and replaygain ~= "off" and replaygain ~= ""
+    local headroom_db = max_positive_gain
+    if rg_enabled and headroom_db > 0 then
+        headroom_db = headroom_db + 6
+    end
+    if headroom_db > 0 then
+        table.insert(filters, 1, string.format("volume=%.2fdB", -headroom_db))
     end
 
     -- 声道滤镜放在 EQ 后面，EQ 调节时不会丢失声道模式。
     if channel_filter then
         table.insert(filters, channel_filter)
+    end
+
+    -- 全频段均被跳过且没有声道处理时，移除本脚本滤镜。
+    if #filters == 0 then
+        mp.commandv("af", "remove", "@eq_gui")
+        return
     end
 
     local filter_str = "@eq_gui:lavfi=[" .. table.concat(filters, ",") .. "]"
@@ -207,6 +308,7 @@ local function load_config()
                 end
             end
         end
+        current_preset = detect_preset()
         apply_audio_eq()
     end
 end
@@ -218,8 +320,10 @@ local function update_mouse_pos()
     if m and osd and osd.w > 0 and osd.h > 0 then
         mouse.x = m.x
         mouse.y = m.y
+        -- 虚拟画布与实际 OSD 保持相同宽高比，因此 X/Y 使用同一个缩放比例。
+        local virtual_h = BASE_W * osd.h / osd.w
         mouse.vx = m.x * (BASE_W / osd.w)
-        mouse.vy = m.y * (BASE_H / osd.h)
+        mouse.vy = m.y * (virtual_h / osd.h)
     end
 end
 
@@ -246,12 +350,36 @@ local function draw_circle(x, y, r)
     local k = 0.55228 * r
     return string.format(
         "m %f %f b %f %f %f %f %f %f b %f %f %f %f %f %f b %f %f %f %f %f %f b %f %f %f %f %f %f ",
-        x, y - r, 
-        x + k, y - r, x + r, y - k, x + r, y, 
-        x + r, y + k, x + k, y + r, x, y + r, 
-        x - k, y + r, x - r, y + k, x - r, y, 
+        x, y - r,
+        x + k, y - r, x + r, y - k, x + r, y,
+        x + r, y + k, x + k, y + r, x, y + r,
+        x - k, y + r, x - r, y + k, x - r, y,
         x - r, y - k, x - k, y - r, x, y - r
     )
+end
+
+-- 计算预设下拉列表的几何尺寸 (向上弹出)
+local function get_preset_list_geom()
+    local n = #presets
+    local w = btns.preset.w
+    local h = n * PRESET_ITEM_H + PRESET_PAD * 2
+    local x = btns.preset.x
+    local y = btns.preset.y - 6 - h
+    return x, y, w, h
+end
+
+-- 命中测试：返回鼠标所在的下拉列表项索引
+local function hit_preset_item(vx, vy)
+    if not ui.preset_open then return nil end
+    local lx, ly, lw = get_preset_list_geom()
+    if vx < lx or vx > lx + lw then return nil end
+    for i = 1, #presets do
+        local iy = ly + PRESET_PAD + (i - 1) * PRESET_ITEM_H
+        if vy >= iy and vy <= iy + PRESET_ITEM_H then
+            return i
+        end
+    end
+    return nil
 end
 
 -- 核心渲染逻辑
@@ -261,17 +389,28 @@ local function render()
     local osd = mp.get_property_native("osd-dimensions")
     if not osd or osd.w == 0 or osd.h == 0 then return end
 
+    -- 关键修复：不要把固定的 1280x720 画布强行拉伸到任意 OSD。
+    -- 让虚拟画布动态匹配 OSD 的宽高比，这样所有图形会等比缩放，弹窗不会被压扁/拉长。
+    local virtual_h = BASE_W * osd.h / osd.w
     overlay.res_x = BASE_W
-    overlay.res_y = BASE_H
+    overlay.res_y = math.floor(virtual_h + 0.5)
 
     ui.px = math.floor((BASE_W - PANEL_W) / 2)
-    ui.py = math.floor((BASE_H - PANEL_H) / 2)
+    ui.py = math.floor((virtual_h - PANEL_H) / 2)
     local px, py = ui.px, ui.py
 
-    btns.save.x = px + PANEL_W - 145
-    btns.save.y = py + PANEL_H - 52
-    btns.reset.x = btns.save.x - 135
+        -- ================= 修改开始 =================
+    -- 保持预设按钮左边缘与原布局一致（即 px + PANEL_W - 432），统一间距后向右顺延
+    local btn_gap = 16 -- 统一按钮间距，可根据需要微调
+
+    btns.preset.x = px + PANEL_W - 432
+    btns.reset.x = btns.preset.x + btns.preset.w + btn_gap
+    btns.save.x = btns.reset.x + btns.reset.w + btn_gap
+
+    btns.preset.y = py + PANEL_H - 52
     btns.reset.y = py + PANEL_H - 52
+    btns.save.y = py + PANEL_H - 52
+    -- ================= 修改结束 =================
 
     btns.close.x = px + PANEL_W - 44
     btns.close.y = py + 12
@@ -291,7 +430,7 @@ local function render()
     -- 3. 右上角“✕”关闭按钮
     local close_hover = (mouse.vx >= btns.close.x and mouse.vx <= btns.close.x + btns.close.w and mouse.vy >= btns.close.y and mouse.vy <= btns.close.y + btns.close.h)
     local close_path = draw_round_rect(btns.close.x, btns.close.y, btns.close.w, btns.close.h, btns.close.radius)
-    
+
     if close_hover then
         ass = ass .. string.format("{\\pos(0,0)\\an7\\p1\\1c%s\\bord0}%s{\\p0}\n", colors.close_hover, close_path)
     end
@@ -300,7 +439,7 @@ local function render()
 
     -- 4. 极简胶囊开关 (无文字 uosc/iOS 风格)
     local toggle_hover = (mouse.vx >= btns.toggle.x and mouse.vx <= btns.toggle.x + btns.toggle.w and mouse.vy >= btns.toggle.y and mouse.vy <= btns.toggle.y + btns.toggle.h)
-    
+
     local pill_color, knob_color
     if eq_enabled then
         pill_color = toggle_hover and colors.hover or colors.active
@@ -341,7 +480,7 @@ local function render()
         local sy = line_y_0 - (val_clamped / 15) * ((line_y_m15 - line_y_15) / 2)
 
         local is_active = (i == ui.dragging_band or i == ui.hover_band or i == ui.selected_band)
-        
+
         local act_color
         if not eq_enabled then
             act_color = "&H666666&"
@@ -382,6 +521,56 @@ local function render()
     ass = ass .. string.format("{\\pos(0,0)\\an7\\p1\\1c%s\\3c%s\\bord1}%s{\\p0}\n", save_hover and colors.btn_hover or colors.btn, colors.btn_border, save_path)
     ass = ass .. string.format("{\\pos(%d,%d)\\an5\\fs14\\1c%s}%s\n", btns.save.x + btns.save.w/2, btns.save.y + btns.save.h/2, colors.active, btns.save.label)
 
+    -- 8. 预设下拉按钮
+    local preset_hover = (mouse.vx >= btns.preset.x and mouse.vx <= btns.preset.x + btns.preset.w and
+                          mouse.vy >= btns.preset.y and mouse.vy <= btns.preset.y + btns.preset.h)
+
+    local preset_path = draw_round_rect(btns.preset.x, btns.preset.y, btns.preset.w, btns.preset.h, btns.preset.radius)
+    local preset_bg = (preset_hover or ui.preset_open) and colors.btn_hover or colors.btn
+    ass = ass .. string.format("{\\pos(0,0)\\an7\\p1\\1c%s\\3c%s\\bord1}%s{\\p0}\n",
+        preset_bg, colors.btn_border, preset_path)
+
+    local preset_name = current_preset and presets[current_preset].name or "自定义 Custom"
+    ass = ass .. string.format("{\\pos(%d,%d)\\an5\\fs14\\1c%s}%s\n",
+        btns.preset.x + btns.preset.w / 2 - 8, btns.preset.y + btns.preset.h / 2, colors.text_hi, preset_name)
+
+    -- 下拉三角箭头
+    local aax = btns.preset.x + btns.preset.w - 18
+    local aay = btns.preset.y + btns.preset.h / 2 - 1
+    local arrow = string.format("m %f %f l %f %f l %f %f ", aax - 5, aay - 2, aax + 5, aay - 2, aax, aay + 4)
+    ass = ass .. string.format("{\\pos(0,0)\\an7\\p1\\1c%s\\bord0}%s{\\p0}\n", colors.text, arrow)
+
+    -- 9. 展开的预设列表 (向上弹出，绘制在最上层)
+    if ui.preset_open then
+        local lx, ly, lw, lh = get_preset_list_geom()
+
+        local list_path = draw_round_rect(lx, ly, lw, lh, 10)
+        ass = ass .. string.format("{\\pos(0,0)\\an7\\p1\\1c%s\\3c%s\\bord1\\1a&H08&}%s{\\p0}\n",
+            colors.bg, colors.btn_border, list_path)
+
+        for i, p in ipairs(presets) do
+            local iy = ly + PRESET_PAD + (i - 1) * PRESET_ITEM_H
+            local hov = (mouse.vx >= lx and mouse.vx <= lx + lw and
+                         mouse.vy >= iy and mouse.vy <= iy + PRESET_ITEM_H)
+
+            if hov then
+                local hpath = draw_round_rect(lx + 3, iy + 1, lw - 6, PRESET_ITEM_H - 2, 6)
+                ass = ass .. string.format("{\\pos(0,0)\\an7\\p1\\1c%s\\bord0\\1a&H50&}%s{\\p0}\n",
+                    colors.active, hpath)
+            end
+
+            local col = colors.text
+            if current_preset == i then
+                col = colors.active
+            elseif hov then
+                col = colors.text_hi
+            end
+
+            ass = ass .. string.format("{\\pos(%d,%d)\\an4\\fs14\\1c%s}%s\n",
+                lx + 14, iy + PRESET_ITEM_H / 2, col, p.name)
+        end
+    end
+
     overlay.data = ass
     overlay:update()
 end
@@ -398,6 +587,22 @@ local function calc_gain_from_vy(vy)
     return math.floor(val * 2 + 0.5) / 2
 end
 
+-- 应用指定预设到均衡器曲线
+local function apply_preset(idx)
+    local p = presets[idx]
+    if not p then return end
+
+    for i = 1, #bands do
+        bands[i].val = p.vals[i] or 0
+    end
+
+    current_preset = idx
+    apply_audio_eq()
+    render()
+
+    mp.osd_message("EQ 预设: " .. p.name, 2)
+end
+
 -- 检测鼠标悬停在哪个频段
 local function check_hover_band()
     local gap = (PANEL_W - 90) / #bands
@@ -409,7 +614,7 @@ local function check_hover_band()
     ui.hover_band = nil
     for i, _ in ipairs(bands) do
         local sx = start_x + (i - 1) * gap
-        if mouse.vx >= sx - (gap/2) and mouse.vx <= sx + (gap/2) and 
+        if mouse.vx >= sx - (gap/2) and mouse.vx <= sx + (gap/2) and
            mouse.vy >= hit_top and mouse.vy <= hit_bottom then
             ui.hover_band = i
             break
@@ -424,6 +629,29 @@ local function on_mouse_down()
     if not is_visible then return end
     update_mouse_pos()
     mouse.down = true
+
+    -- 优先处理预设下拉框
+    local preset_btn_hit = (mouse.vx >= btns.preset.x and mouse.vx <= btns.preset.x + btns.preset.w and
+                            mouse.vy >= btns.preset.y and mouse.vy <= btns.preset.y + btns.preset.h)
+
+    if ui.preset_open then
+        local idx = hit_preset_item(mouse.vx, mouse.vy)
+        if idx then
+            ui.preset_open = false
+            apply_preset(idx)
+            return
+        end
+        if not preset_btn_hit then
+            ui.preset_open = false
+            render()
+        end
+    end
+
+    if preset_btn_hit then
+        ui.preset_open = not ui.preset_open
+        render()
+        return
+    end
 
     -- 点击右上角“✕”关闭按钮
     if mouse.vx >= btns.close.x and mouse.vx <= btns.close.x + btns.close.w and
@@ -445,6 +673,7 @@ local function on_mouse_down()
     if mouse.vx >= btns.reset.x and mouse.vx <= btns.reset.x + btns.reset.w and
        mouse.vy >= btns.reset.y and mouse.vy <= btns.reset.y + btns.reset.h then
         for _, b in ipairs(bands) do b.val = 0 end
+        current_preset = detect_preset()
         apply_audio_eq()
         render()
         return
@@ -464,6 +693,7 @@ local function on_mouse_down()
         ui.dragging_band = ui.hover_band
         ui.selected_band = ui.hover_band
         bands[ui.dragging_band].val = calc_gain_from_vy(mouse.vy)
+        current_preset = detect_preset()
         apply_audio_eq()
         render()
     end
@@ -483,6 +713,7 @@ local function on_right_click()
     check_hover_band()
     if ui.hover_band then
         bands[ui.hover_band].val = 0
+        current_preset = detect_preset()
         apply_audio_eq()
         render()
     end
@@ -495,6 +726,7 @@ local function on_wheel(delta)
     if idx then
         local new_val = math.max(-15, math.min(15, bands[idx].val + delta * 0.5))
         bands[idx].val = new_val
+        current_preset = detect_preset()
         apply_audio_eq()
         render()
     end
@@ -509,9 +741,11 @@ local function on_key_nav(dir)
         ui.selected_band = math.min(#bands, ui.selected_band + 1)
     elseif dir == "up" then
         bands[ui.selected_band].val = math.min(15, bands[ui.selected_band].val + 0.5)
+        current_preset = detect_preset()
         apply_audio_eq()
     elseif dir == "down" then
         bands[ui.selected_band].val = math.max(-15, bands[ui.selected_band].val - 0.5)
+        current_preset = detect_preset()
         apply_audio_eq()
     end
     render()
@@ -524,6 +758,7 @@ mp.observe_property("mouse-pos", "native", function(name, val)
 
     if mouse.down and ui.dragging_band then
         bands[ui.dragging_band].val = calc_gain_from_vy(mouse.vy)
+        current_preset = detect_preset()
         apply_audio_eq()
     else
         check_hover_band()
@@ -559,18 +794,19 @@ toggle_ui = function()
         -- 滚轮与键盘绑定
         mp.add_forced_key_binding("WHEEL_UP", "eq-wheel-up", function() on_wheel(1) end)
         mp.add_forced_key_binding("WHEEL_DOWN", "eq-wheel-down", function() on_wheel(-1) end)
-        
+
         mp.add_forced_key_binding("LEFT", "eq-left", function() on_key_nav("left") end)
         mp.add_forced_key_binding("RIGHT", "eq-right", function() on_key_nav("right") end)
         mp.add_forced_key_binding("UP", "eq-up", function() on_key_nav("up") end)
         mp.add_forced_key_binding("DOWN", "eq-down", function() on_key_nav("down") end)
-        
+
         mp.add_forced_key_binding("ENTER", "eq-enter", function()
             save_config()
             toggle_ui()
         end)
         mp.add_forced_key_binding("r", "eq-reset", function()
             for _, b in ipairs(bands) do b.val = 0 end
+            current_preset = detect_preset()
             apply_audio_eq()
             render()
         end)
@@ -578,6 +814,7 @@ toggle_ui = function()
         render()
     else
         ui.dragging_band = nil
+        ui.preset_open = false
         mouse.down = false
 
         -- 解除按键独占
@@ -617,6 +854,14 @@ mp.register_script_message("audio-channel-right", function()
     set_channel_mode("right")
 end)
 
+-- ESC：优先收起下拉框，其次关闭整个面板
 mp.add_key_binding("ESC", "close-equalizer-gui", function()
-    if is_visible then toggle_ui() end
+    if not is_visible then return end
+    if ui.preset_open then
+        ui.preset_open = false
+        render()
+        return
+    end
+    toggle_ui()
 end)
+mp.register_script_message("audio-channel-system", function() set_channel_mode("system") end)
