@@ -14,9 +14,16 @@
   "libplacebo": "7.387.0",
   "dovi_tool": "614c816b6446dcd1dbaf433403d499a6026fbb5a",
   "release_status": "post-2.0.0-source-candidate-not-published",
-  "runtime_candidate": "post-2.0.0-dcp-dv-seek",
+  "runtime_candidate": "post-2.0.0-dcp-dv-seek-gpu-ring",
   "configuration_merge": "e684f8c0137c2dc51f9cff32f0fed3d9255a1e15",
   "bluray_plugin": "12487ef077f42c417c56e74f09304e4273c6fac4",
   "libplacebo_commit": "275f7dea27924cdd34ab2e6c20e448b6bc4fab65",
-  "libplacebo_patch": "packaging/windows/patches/libplacebo-7.387-xyz.patch"
+  "libplacebo_patch": "packaging/windows/patches/libplacebo-7.387-xyz.patch",
+  "gpu_sync_update": {
+    "transport": "D3D11 shared fences with checked keyed-mutex compatibility",
+    "transfer_slots": 8,
+    "ready_frame_limit": 12,
+    "color_contract": "unchanged PQ/BGRA and HLG/scRGB FP16",
+    "release_state": "source candidate; runtime acceptance in docs/post-2.0.0-candidate.md"
+  }
 }

@@ -1,24 +1,40 @@
-#include <d3d11_1.h>
+#include <d3d11_4.h>
 #ifndef WDV_TEST_OMIT_RPU
 #define WDV_TEST_OMIT_RPU 0
 #endif
 // Separate MediaEngine device: the MPV decoder/VO context is never given to MF.
-// NT shared textures move pixels only on GPU. Key transitions establish producer
+// NT shared textures move pixels only on GPU. Queue fences or legacy keys establish producer
 // completion before the consumer copies; caller textures remain alive for the job.
 struct SharedGpuSurface {
     ComPtr<ID3D11Texture2D> caller, renderer;
     ComPtr<IDXGIKeyedMutex> caller_key, renderer_key;
+    ComPtr<ID3D11Fence> caller_fence, renderer_fence;
+    ComPtr<ID3D11DeviceContext4> caller_queue, renderer_queue;
+    UINT64 sequence=0;
+    bool fenced=false;
     void init(ID3D11Device* a, ID3D11Device* b, UINT w, UINT h, DXGI_FORMAT format) {
+        ComPtr<ID3D11Device5> a5,b5;ComPtr<ID3D11DeviceContext> ac,bc;
+        a->GetImmediateContext(&ac);b->GetImmediateContext(&bc);
+        if(SUCCEEDED(a->QueryInterface(IID_PPV_ARGS(&a5))) &&
+           SUCCEEDED(b->QueryInterface(IID_PPV_ARGS(&b5))) &&
+           SUCCEEDED(ac.As(&caller_queue)) && SUCCEEDED(bc.As(&renderer_queue)) &&
+           SUCCEEDED(a5->CreateFence(0,D3D11_FENCE_FLAG_SHARED,IID_PPV_ARGS(&caller_fence)))){
+            HANDLE shared=nullptr;HRESULT hr=caller_fence->CreateSharedHandle(nullptr,GENERIC_ALL,nullptr,&shared);
+            if(SUCCEEDED(hr)){hr=b5->OpenSharedFence(shared,IID_PPV_ARGS(&renderer_fence));CloseHandle(shared);}
+            fenced=SUCCEEDED(hr);
+        }
+        if(!fenced){caller_fence.Reset();renderer_fence.Reset();caller_queue.Reset();renderer_queue.Reset();}
+
         D3D11_TEXTURE2D_DESC d{}; d.Width=w;d.Height=h;d.MipLevels=1;d.ArraySize=1;
         d.Format=format;d.SampleDesc.Count=1;d.Usage=D3D11_USAGE_DEFAULT;
         d.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET;
-        d.MiscFlags=D3D11_RESOURCE_MISC_SHARED_NTHANDLE|D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+        d.MiscFlags=D3D11_RESOURCE_MISC_SHARED_NTHANDLE | (fenced ? D3D11_RESOURCE_MISC_SHARED : D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX);
         CK(a->CreateTexture2D(&d,nullptr,&caller));
         ComPtr<IDXGIResource1> resource;CK(caller.As(&resource));HANDLE handle=nullptr;
         CK(resource->CreateSharedHandle(nullptr,DXGI_SHARED_RESOURCE_READ|DXGI_SHARED_RESOURCE_WRITE,nullptr,&handle));
         ComPtr<ID3D11Device1> device;HRESULT hr=b->QueryInterface(IID_PPV_ARGS(&device));
         if(SUCCEEDED(hr))hr=device->OpenSharedResource1(handle,IID_PPV_ARGS(&renderer));
-        CloseHandle(handle);CK(hr);CK(caller.As(&caller_key));CK(renderer.As(&renderer_key));
+        CloseHandle(handle);CK(hr);if(!fenced){CK(caller.As(&caller_key));CK(renderer.As(&renderer_key));}
     }
 };
 struct KeyLease {
@@ -32,6 +48,32 @@ struct KeyLease {
     ~KeyLease(){if(held)key->ReleaseSync(release_key);}
     void release(){HRESULT hr=key->ReleaseSync(release_key);held=false;CK(hr);}
 };
+// Queue waits preserve producer/consumer/reuse ordering without stalling the CPU.
+// Older D3D11 implementations retain the existing checked keyed-mutex path.
+struct SurfaceLease {
+    SharedGpuSurface& surface;bool caller,held=false;
+    std::unique_ptr<KeyLease> legacy;
+    SurfaceLease(SharedGpuSurface& s,bool c,UINT64 acquire,UINT64 release):surface(s),caller(c){
+        if(s.fenced)CK(queue()->Wait(fence(),s.sequence));
+        else legacy=std::make_unique<KeyLease>(c?s.caller_key.Get():s.renderer_key.Get(),acquire,release);
+        held=true;
+    }
+    ID3D11DeviceContext4* queue(){return caller?surface.caller_queue.Get():surface.renderer_queue.Get();}
+    ID3D11Fence* fence(){return caller?surface.caller_fence.Get():surface.renderer_fence.Get();}
+    void release(){
+        if(surface.fenced){
+            CK(queue()->Signal(fence(),surface.sequence+1));
+            ++surface.sequence;queue()->Flush();
+        }else legacy->release();
+        held=false;
+    }
+    ~SurfaceLease(){
+        if(held&&surface.fenced){
+            if(SUCCEEDED(queue()->Signal(fence(),surface.sequence+1)))++surface.sequence;
+            queue()->Flush();
+        }
+    }
+};
 struct ContextLease {
     ID3D10Multithread* mt;
     ContextLease(ID3D10Multithread*m):mt(m){mt->Enter();}
@@ -43,7 +85,10 @@ struct PersistentEngine {
     const wdv_gpu_frame_v5*gpu=nullptr; ID3D11Device*shared_device=nullptr;
     ComPtr<ID3D11DeviceContext> caller_context;
     ComPtr<ID3D10Multithread> caller_mt;
-    SharedGpuSurface input_shared[8], output_shared;
+    // Rotate across jobs: single-frame jobs must not keep reusing slot zero.
+    // Eight bounded slots also cover the largest supported batch.
+    SharedGpuSurface input_shared[8], output_shared[8];
+    uint64_t input_slot=0;
     HWND window=nullptr;
     ComPtr<ID3D11Device> d3d;ComPtr<ID3D11DeviceContext> context;
     ComPtr<IMFDXGIDeviceManager> manager;
@@ -80,7 +125,7 @@ struct PersistentEngine {
             CK(shared_device->QueryInterface(IID_PPV_ARGS(&caller_mt)));
             if(!caller_mt->GetMultithreadProtected())throw Failure{E_FAIL,"MPV device lacks multithread protection"};
             for(auto& surface:input_shared)surface.init(shared_device,d3d.Get(),w,h,DXGI_FORMAT_P010);
-            output_shared.init(shared_device,d3d.Get(),w,h,output_format());
+            for(auto& surface:output_shared)surface.init(shared_device,d3d.Get(),w,h,output_format());
         }else CK(D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_HARDWARE,nullptr,D3D11_CREATE_DEVICE_VIDEO_SUPPORT|D3D11_CREATE_DEVICE_BGRA_SUPPORT,nullptr,0,D3D11_SDK_VERSION,&d3d,nullptr,&context));
         ComPtr<ID3D10Multithread> mt;CK(d3d.As(&mt));mt->SetMultithreadProtected(TRUE);
         UINT token=0;CK(MFCreateDXGIDeviceManager(&token,&manager));CK(manager->ResetDevice(d3d.Get(),token));
@@ -120,13 +165,14 @@ struct PersistentEngine {
                 HRESULT transfer=engine->TransferVideoFrame(texture.Get(),nullptr,&rect,&border);CK(transfer);
                 if(transfer!=S_OK){wait_for_frame();continue;}
                 if(gpu){
+                    auto& shared_output=output_shared[rendered%8];
                     trender=gpu_clock_ms();
-                    {KeyLease access(output_shared.renderer_key.Get(),0,1);
-                     context->CopyResource(output_shared.renderer.Get(),texture.Get());access.release();}
+                    {SurfaceLease access(shared_output,false,0,1);
+                     context->CopyResource(shared_output.renderer.Get(),texture.Get());access.release();}
                     tshared=gpu_clock_ms();
-                    {KeyLease access(output_shared.caller_key.Get(),1,0);
-                     ContextLease lock(caller_mt.Get());
-                     caller_context->CopyResource(static_cast<ID3D11Texture2D*>(gpu[next].output_texture),output_shared.caller.Get());access.release();}
+                    {ContextLease lock(caller_mt.Get());
+                     SurfaceLease access(shared_output,true,1,0);
+                     caller_context->CopyResource(static_cast<ID3D11Texture2D*>(gpu[next].output_texture),shared_output.caller.Get());access.release();}
                     tcaller=gpu_clock_ms();
                     if(tcaller-tcopy>8){wchar_t profile[32768];if(GetEnvironmentVariableW(L"GPU_COPY_PROFILE",profile,32768)){std::ofstream log(fs::path(profile),std::ios::app);log<<input[next].pts<<","<<trender-tcopy<<","<<tshared-trender<<","<<tcaller-tshared<<"\n";}}
                     CK(d3d->GetDeviceRemovedReason());CK(shared_device->GetDeviceRemovedReason());
@@ -139,7 +185,7 @@ struct PersistentEngine {
         }
         if(next!=count)throw Failure{HRESULT_FROM_WIN32(WAIT_TIMEOUT),"persistent frame sequence timeout"};
         if(!dolbyLoaded())throw Failure{E_FAIL,"Dolby RendererEffect not loaded"};
-        last_end=input[count-1].pts+input[count-1].duration;queue->retire(previous); wchar_t path[32768]; if(GetEnvironmentVariableW(L"P84_TIMING_PATH",path,32768)){std::ofstream log(fs::path(path),std::ios::app);log<<rendered<<","<<GetTickCount64()-begin_ms<<","<<prep_ms<<","<<copy_ms<<"\n";} return int(next);
+        last_end=input[count-1].pts+input[count-1].duration;queue->retire(previous); wchar_t path[32768]; if(GetEnvironmentVariableW(L"P84_TIMING_PATH",path,32768)){std::ofstream log(fs::path(path),std::ios::app);log<<rendered<<","<<GetTickCount64()-begin_ms<<","<<prep_ms<<","<<copy_ms<<","<<(gpu&&output_shared[0].fenced?"gpu-fence":"keyed-or-cpu")<<"\n";} return int(next);
     }
     std::vector<ComPtr<IMFSample>> make_frames(){
         HMODULE self=nullptr;CK(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,reinterpret_cast<LPCWSTR>(&wnd),&self)?S_OK:HRESULT_FROM_WIN32(GetLastError()));
@@ -164,12 +210,13 @@ struct PersistentEngine {
                 ComPtr<ID3D11Device> owner;source->GetDevice(&owner);if(owner.Get()!=shared_device)throw Failure{E_INVALIDARG,"GPU device mismatch"};
                 D3D11_TEXTURE2D_DESC td{};td.Width=w;td.Height=h;td.MipLevels=1;td.ArraySize=1;td.Format=DXGI_FORMAT_P010;td.SampleDesc.Count=1;td.Usage=D3D11_USAGE_DEFAULT;td.BindFlags=D3D11_BIND_SHADER_RESOURCE;
                 CK(d3d->CreateTexture2D(&td,nullptr,&tex));
+                auto& shared_input=input_shared[input_slot++%8];
                 D3D11_BOX box{0,0,0,w,h,1};
-                {KeyLease access(input_shared[i].caller_key.Get(),0,1);
-                 ContextLease lock(caller_mt.Get());
-                 caller_context->CopySubresourceRegion(input_shared[i].caller.Get(),0,0,0,0,source,gpu[i].input_subresource,&box);access.release();}
-                {KeyLease access(input_shared[i].renderer_key.Get(),1,0);
-                 context->CopyResource(tex.Get(),input_shared[i].renderer.Get());access.release();}
+                {ContextLease lock(caller_mt.Get());
+                 SurfaceLease access(shared_input,true,0,1);
+                 caller_context->CopySubresourceRegion(shared_input.caller.Get(),0,0,0,0,source,gpu[i].input_subresource,&box);access.release();}
+                {SurfaceLease access(shared_input,false,1,0);
+                 context->CopyResource(tex.Get(),shared_input.renderer.Get());access.release();}
             }else{
             std::vector<uint8_t> packed(size_t(w)*h*3);
             for(uint32_t row=0;row<h;row++)memcpy(packed.data()+size_t(row)*w*2,v.y+size_t(row)*v.stride_y,w*2);

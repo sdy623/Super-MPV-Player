@@ -344,9 +344,9 @@ static bool hold_seek_preroll(struct priv *p, struct mp_image *img)
 static void process(struct mp_filter *f)
 {
     struct priv *p=f->priv;
-    // GPU work is single-frame after priming, with ~100ms of ordered output
+    // GPU work is single-frame after priming, with up to READY_CAP ordered output
     // prefetch. This absorbs bounded MediaEngine transfer stalls on resume.
-    // CPU/P7 keeps its original batch/drain ordering. No timestamps are changed.
+    // CPU fallback keeps its original batch/drain ordering. No timestamps are changed.
     int buffered=p->ready_count-p->ready_pos;
     bool room=p->job_gpu ? buffered+p->job_count<=READY_CAP : buffered==0;
     if(p->job_pending&&room&&InterlockedCompareExchange(&p->done,0,0)){
@@ -357,9 +357,12 @@ static void process(struct mp_filter *f)
         struct mp_image *img=p->ready[p->ready_pos];p->ready[p->ready_pos++]=NULL;
         mp_pin_in_write(f->ppins[1],MAKE_FRAME(MP_FRAME_VIDEO,img));
     }
-    // Reserve a whole batch even if the next input changes format.
-    if(!p->job_pending && (!p->gpu_session || p->ready_count-p->ready_pos<=READY_CAP-BATCH)){
-        while(!p->eof&&p->count<BATCH){
+    // Bound the next batch by actual free slots, not by a worst-case batch
+    // reservation. Steady GPU work submits one frame; reserving six wasted five
+    // ready slots and exposed short MediaEngine stalls after resume.
+    int capacity=MPMIN(BATCH,READY_CAP-(p->ready_count-p->ready_pos));
+    if(!p->job_pending && capacity>0){
+        while(!p->eof&&p->count<capacity){
             if(!mp_pin_out_request_data(f->ppins[0]))return;
             struct mp_frame fr=mp_pin_out_read(f->ppins[0]);
             if(fr.type==MP_FRAME_EOF){

@@ -27,6 +27,16 @@ BL-only processing is not mislabeled as FEL reconstruction. Source RPU/EL is not
 removed from fallback frames. Actual frame counters and output format determine
 UI status, not just an installed extension.
 
+Shared surfaces use D3D11.4 GPU fence `Wait`/`Signal` when both devices support
+shared fences. Older devices keep the checked keyed-mutex path. Eight rotating
+input/output slots prevent a single-frame job from repeatedly serializing on the
+same transfer surface. Producer completion, consumer copies and slot reuse are
+ordered on the GPU; pixels do not take a CPU readback detour. The existing
+12-frame ready limit is unchanged, and batches now use its available slots.
+The transfer ring is bounded: at 3840x2160 its P010 and FP16 surfaces total about
+696 MiB, excluding decoder, output-frame and MediaEngine allocations. Allocation
+or rendering failure keeps the original frame/fallback path.
+
 During ordinary precise seeks, the core signals the target to the Windows filter.
 HEVC decoding and RPU/EL pairing still run, but invisible decoded pre-roll is not
 sent through the expensive renderer. Only its latest frame is retained for EOF;
