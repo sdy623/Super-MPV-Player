@@ -7,6 +7,15 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
+[assembly: System.Reflection.AssemblyVersion("2.1.1.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.1.1.0")]
+#if PRIVATE
+[assembly: System.Reflection.AssemblyInformationalVersion("2.1.1-private")]
+#else
+[assembly: System.Reflection.AssemblyInformationalVersion("2.1.1-open")]
+#endif
+[assembly: System.Reflection.AssemblyProduct("MPV Complete")]
+
 internal static class MpvAnimeLauncher
 {
     private static readonly string Root = AppDomain.CurrentDomain.BaseDirectory;

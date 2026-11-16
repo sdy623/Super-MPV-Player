@@ -1,4 +1,4 @@
-# Open edition: Windows 2.1.0
+# Open edition: Windows 2.1.1
 
 Video and audio are independent choices. Windows Dolby video processing may run together with Omniphony object audio. Omniphony does not implement Dolby Vision video.
 
@@ -34,7 +34,7 @@ The public candidate uses the same source-backed integrated core for its origina
 ## Build and release status
 The exact integrated MPV source is in `core/mpv`; upstream revision pins are in `sources.lock.json`. Existing UI/config and plugin submodules are retained. Native bridge source is in `windows/native-dv`. See its build.cmd and RPU adapter instructions; Visual Studio and Windows SDK are build dependencies, not redistribution payloads.
 
-The Windows 2.1.0 release packages the integrated core and merged configuration with known Windows-DV resume drops. See [verification and limitations](release-2.1.0.md), [assembly instructions](../packaging/windows/README.md), and [exact native dependency sources](native-dependency-sources.json). The companion source archive includes the integrated sources, submodule sources, pinned RPU dependency and required ASIO headers. Vendor runtime notices and source-availability information remain in the installer. Fresh full dependency recompilation and bit-identical reproduction were not performed during packaging. Antivirus vendor review remains pending; functional launch success is not a clean antivirus verdict.
+The Windows 2.1.1 candidate packages the integrated core and merged configuration with known Windows-DV resume drops. See [verification and limitations](release-2.1.1.md), [assembly instructions](../packaging/windows/README.md), and [exact native dependency sources](native-dependency-sources.json). The companion source archive includes the integrated sources, submodule sources, pinned RPU dependency and required ASIO headers. Vendor runtime notices and source-availability information remain in the installer. Fresh full dependency recompilation and bit-identical reproduction were not performed during packaging. Antivirus vendor review remains pending; functional launch success is not a clean antivirus verdict.
 
 ## Theme helper and generic display defaults
 

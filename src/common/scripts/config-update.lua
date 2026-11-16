@@ -193,3 +193,28 @@ mp.register_script_message("check-config-update", check_update)
 mp.add_key_binding("Ctrl+Alt+u", "check-config-update", check_update)
 
 mp.msg.info("GitHub Release Checker loaded: " .. REPO)
+
+local version_overlay = mp.create_osd_overlay('ass-events')
+local version_timeout
+local function show_config_version()
+    local version = get_current_version() or 'unknown'
+    local details = {
+        version = version,
+        product = 'MPV Complete',
+        ui_font = mp.get_property('osd-font'),
+        features = {'Segoe UI text', 'Windows DV GPU texture ring / HLG FP16',
+                    'DV seek pre-roll optimization', 'P7 + Blu-ray menus / chapters',
+                    'DCP XYZ + ICM / PCM', 'Optional Omniphony audio'},
+        known_limit = 'Windows DV pause/resume may drop output frames',
+    }
+    mp.set_property_native('user-data/mpv-complete', details)
+    version_overlay.res_x, version_overlay.res_y = 1280, 720
+    version_overlay.data = [[{\an7\pos(38,38)\fnSegoe UI\fs25\bord1.5\shad0\1c&HFFFFFF&\3c&H202020&}]]
+        .. 'MPV Complete ' .. version .. [[\N\N]]
+        .. table.concat(details.features, [[\N]]) .. [[\N\N]] .. details.known_limit
+    version_overlay:update()
+    if version_timeout then version_timeout:kill() end
+    version_timeout = mp.add_timeout(12, function() version_overlay:remove() end)
+end
+mp.register_script_message('show-config-version', show_config_version)
+mp.add_key_binding('Ctrl+Alt+F1', 'show-config-version', show_config_version)

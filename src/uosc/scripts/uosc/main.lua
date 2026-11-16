@@ -1206,3 +1206,11 @@ end
 
 -- Initial commit
 Manager:disable('user', options.disable_elements)
+
+-- UI defaults can arrive from an upgrade script after uosc initialization.
+mp.observe_property('osd-font', 'string', function(_, font)
+    if font and config.font ~= font then
+        config.font = font
+        request_render()
+    end
+end)

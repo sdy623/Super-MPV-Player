@@ -320,9 +320,19 @@ end
 local function vf_string(filters, full)
     local vf = ""
     local vf_table = properties["vf"]
+    -- A thumbnail subprocess decodes the source, not the parent Windows-DV output.
+    local raw = mp.get_property_native("video-dec-params", {})
+    if not raw.primaries then raw = properties["video-params"] or {} end
+    local meta = mp.get_property_native("vf-metadata/windows_dv", {})
+    local profile = tonumber(raw["dolby-vision-profile"])
+    local compatible_bl = profile == 7 or profile == 8 or meta.state == "fel-gpu-next"
+        or meta["paired-el"] == "yes" or meta["source-base-transfer"] == "hlg"
+    -- zscale cannot accept the Dolby Vision matrix. Use the HDR-compatible BL
+    -- only in this disposable preview; main playback keeps RPU and paired EL.
+    if full and compatible_bl then vf = "format=dolbyvision=no," end
 
     if (properties["video-crop"] or "") ~= "" then
-        vf = "lavfi-crop="..string.gsub(properties["video-crop"], "(%d*)x?(%d*)%+(%d+)%+(%d+)", "w=%1:h=%2:x=%3:y=%4")..","
+        vf = vf .. "lavfi-crop="..string.gsub(properties["video-crop"], "(%d*)x?(%d*)%+(%d+)%+(%d+)", "w=%1:h=%2:x=%3:y=%4")..","
         local width = properties["video-out-params"] and properties["video-out-params"]["dw"]
         local height = properties["video-out-params"] and properties["video-out-params"]["dh"]
         if width and height then
@@ -346,7 +356,7 @@ local function vf_string(filters, full)
     end
 
     if (full and options.tone_mapping ~= "no") or options.tone_mapping == "auto" then
-        if properties["video-params"] and properties["video-params"]["primaries"] == "bt.2020" then
+        if raw.primaries == "bt.2020" then
             local tone_mapping = options.tone_mapping
             if tone_mapping == "auto" then
                 tone_mapping = last_tone_mapping or properties["tone-mapping"]

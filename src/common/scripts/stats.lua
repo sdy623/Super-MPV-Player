@@ -848,7 +848,9 @@ local function append_hdr(s, hdr, video_out)
 
     if hdr["scene-max-r"] or hdr["scene-max-g"] or
        hdr["scene-max-b"] or hdr["scene-avg"] then
-        append(s, "", {prefix="HDR10+:"})
+        -- These are renderer scene statistics, also populated from DV RPU.
+        -- Their presence does not identify SMPTE ST 2094-40 / HDR10+.
+        append(s, "", {prefix="Scene luminance:"})
         append(s, format("%.1f / %.1f / %.1f", hdr["scene-max-r"] or 0,
                          hdr["scene-max-g"] or 0, hdr["scene-max-b"] or 0),
                {prefix="MaxRGB:", suffix=" cd/m²", nl="", indent=""})

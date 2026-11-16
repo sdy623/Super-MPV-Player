@@ -3,6 +3,8 @@ local mp = require('mp')
 local msg = require('mp.msg')
 local opts = require('mp.options')
 local utils = require('mp.utils')
+local ui_font_path = mp.find_config_file('script-modules/ui-font.lua')
+local ui_font = ui_font_path and dofile(ui_font_path)
 
 ------------------------------------------------------------
 -- 默认配置（每次 reload 都从这份默认值重新开始）
@@ -153,6 +155,9 @@ local function load_options()
     opts.read_options(o, 'menu_style')
 
     if o.font_name ~= '' then o.font = o.font_name end
+    -- Bundled macOS themes used a quoted PingFang name even on Windows.
+    o.font = o.font:gsub('^"(.*)"$', '%1')
+    if platform == 'windows' and o.font == 'PingFang SC' then o.font = 'Segoe UI' end
     if o.hover_bg ~= '' then o.hover = o.hover_bg end
     if o.hover_text == '' then o.hover_text = o.text end
     if o.arrow ~= '' then o.submenu_arrow = o.arrow end
@@ -161,7 +166,7 @@ local function load_options()
 
     if o.font == '' then
         if platform == 'windows' then
-            o.font = 'Microsoft YaHei UI'
+            o.font = 'Segoe UI'
         elseif platform == 'darwin' then
             o.font = 'PingFang SC'
         else
@@ -801,7 +806,7 @@ local function text_tag(x,y,text,color,size,align,bold,italic,alpha)
     local i = italic == nil and o.italic or italic
     local a = alpha == nil and 0 or alpha
     return string.format('{\\an%s\\pos(%.2f,%.2f)\\fn%s\\fs%.1f\\b%s\\i%s\\bord0\\shad0\\1c%s\\1a&H%02X&}%s',
-        align or '5', x,y,fn,size,b and '1' or '0',i and '1' or '0',ass_color(color),clamp(a,0,255),ass_text(text))
+        align or '5', x,y,fn,size,b and '1' or '0',i and '1' or '0',ass_color(color),clamp(a,0,255),(ui_font and ui_font.apply(ass_text(text),fn,platform) or ass_text(text)))
 end
 
 local function get_osd()

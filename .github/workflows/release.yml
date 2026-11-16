@@ -1,7 +1,7 @@
 name: Build plugin configuration
 on:
   push:
-    branches: [anime-bd-plugins]
+    branches: [open-edition]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -20,8 +20,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-        env:
-          RELEASE_VERSION: v1.9.19-anime-bd.1
       - uses: actions/upload-artifact@v4
         with:
           name: plugin-configurations

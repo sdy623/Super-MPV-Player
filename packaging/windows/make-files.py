@@ -1,7 +1,8 @@
 from pathlib import Path
 import json,shutil
 R=Path(__file__).resolve().parent;P=R/'payload'
-(P/'安装与启动说明.txt').write_text('''MPV Complete 2.1.0 — 综合播放器正式版
+(P/'portable_config/config-version').write_text('v2.1.1-open\n',encoding='utf8')
+(P/'安装与启动说明.txt').write_text('''MPV Complete 2.1.1 — 综合播放器正式版
 
 使用英文安装路径（默认 D:\\Apps\\MPV-Complete）。本版本的蓝光 Java 运行时不支持中文安装路径，安装器会提前拒绝，原始媒体文件名不受此安装路径限制。
 保留 Windows DV、Omniphony、BD-J 菜单及未加密 DCP CPL 画面/音轨配对。
@@ -17,7 +18,7 @@ assert not any(f.suffix.lower() in {'.icc','.icm'} for f in files)
 assert not any(f.name.lower()=='orender.dll' or (f.name.lower().startswith('harletty') and f.name.lower().endswith('_bridge.dll')) for f in files)
 assert not any(f.name.lower() == 'mpv-freemkv-bridge.exe' for f in files)
 assert not any(f.name.lower() in {'keydb.cfg','cookies.txt','recent.json','celebi.txt','skip-intro.json'} for f in files)
-(P/'package-manifest.json').write_text(json.dumps({'version':'2.1.0','core_source_commit':'49b2f5d','packaging_overlay':'2.1.0','files':[{'path':f.relative_to(P).as_posix(),'bytes':f.stat().st_size} for f in files]},indent=2),encoding='utf8');files.append(P/'package-manifest.json')
+(P/'package-manifest.json').write_text(json.dumps({'version':'2.1.1','core_source_commit':'49b2f5d','packaging_overlay':'2.1.1','files':[{'path':f.relative_to(P).as_posix(),'bytes':f.stat().st_size} for f in files]},indent=2),encoding='utf8');files.append(P/'package-manifest.json')
 inst=[];uninst=[];dirs=set();current=None;overwrite=None
 def esc(s):return s.replace('$','$$')
 for f in files:

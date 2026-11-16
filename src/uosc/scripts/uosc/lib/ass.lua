@@ -1,4 +1,6 @@
 --[[ ASSDRAW EXTENSIONS ]]
+local ui_font_path = mp.find_config_file('script-modules/ui-font.lua')
+local ui_font = ui_font_path and dofile(ui_font_path)
 
 local ass_mt = getmetatable(assdraw.ass_new())
 
@@ -79,7 +81,7 @@ function ass_mt:txt(x, y, align, value, opts)
 	if opts.clip then tags = tags .. opts.clip end
 	-- render
 	self:new_event()
-	self.text = self.text .. '{' .. tags .. '}' .. value
+	self.text = self.text .. '{' .. tags .. '}' .. (ui_font and ui_font.apply(value,opts.font or config.font,mp.get_property('platform')) or value)
 end
 
 -- Tooltip.

@@ -1,6 +1,5 @@
 const fs = require("fs-extra");
 const path = require("path");
-const { execSync } = require("child_process");
 const { ZipArchive } = require("archiver");
 
 // ---------- 配置 ----------
@@ -50,21 +49,7 @@ const ROOT_FILES = ["mpv.conf"];
 
 // ---------- 获取版本号 ----------
 function getVersion() {
-  if (process.env.RELEASE_VERSION) {
-    return process.env.RELEASE_VERSION;
-  }
-  try {
-    const lastTag = execSync("git describe --tags --abbrev=0", {
-      encoding: "utf8",
-    }).trim();
-    const versionNum = lastTag.replace(/^v/, "");
-    const parts = versionNum.split(".");
-    const majorMinor = parts.slice(0, 2).join(".");
-    const patch = parseInt(parts[2] || "0", 10) + 1;
-    return `v${majorMinor}.${patch}`;
-  } catch {
-    return "v1.0.0";
-  }
+  return process.env.RELEASE_VERSION || `v${fs.readFileSync(path.join(__dirname, "VERSION"), "utf8").trim()}`;
 }
 
 // ---------- 打包函数 ----------
