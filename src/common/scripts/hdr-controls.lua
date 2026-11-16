@@ -1,7 +1,7 @@
 -- HDR/DV diagnostics and session-local gpu-next controls.
 -- Native playback is an optional separate MediaEngine window. Never label PQ as DV.
 local utils=require 'mp.utils'
-local mode='g614-sdr'
+local mode='display-auto'
 local overrides={}
 local timer
 local media_active=not mp.get_property_bool('idle-active',true)
@@ -75,7 +75,7 @@ local function snapshot()
 end
 local function apply()
     timer=nil
-    if mode=='g614-sdr' then
+    if mode=='sdr-reference' then
         local src=mp.get_property_native('video-params',{})
         local hdr=src.gamma=='pq' or src.gamma=='hlg' or src.colormatrix=='dolbyvision'
         set('target-colorspace-hint',hdr and 'yes' or 'auto')
@@ -125,7 +125,7 @@ local function menu()
                 {title='RPU 转发不等于效果消费；DV HDR 显示输出仍须验收',selectable=false,muted=true,value={'ignore'}},
                 {title='F1 / P7 原盘继续 MPV；不自动转换或丢增强层',selectable=false,muted=true,value={'ignore'}},
                 {title='重新检测系统扩展',value={'script-message-to','windows_native_dv','probe'}}}},
-        {title='G614FM：HDR / DV → SDR + 出厂 ICM',active=mode=='g614-sdr',value={'script-message-to','hdr_controls','mode','g614-sdr'}},
+        {title='SDR 映射 + 系统 ICC（203 nits 参考值）',active=mode=='sdr-reference',value={'script-message-to','hdr_controls','mode','sdr-reference'}},
         {title='跟随显示器：自动 SDR / HDR10（不是原生 DV）',active=mode=='display-auto',value={'script-message-to','hdr_controls','mode','display-auto'}}}
     for _,key in ipairs(order) do
         local sub={}
@@ -137,7 +137,7 @@ local function menu()
         local fixed_by_windows=inside.windows_processed and (key=='tone-mapping' or key=='gamut-mapping-mode' or key:match('^hdr%-') or key=='tone-mapping-visualize')
         items[#items+1]={id=key,title=labels[key],hint=fixed_by_windows and '先切回原映射再调整' or mp.get_property('options/'..key,''),selectable=not fixed_by_windows,muted=fixed_by_windows,items=sub}
     end
-    items[#items+1]={title='重置：G614FM 自动映射默认值',value={'script-message-to','hdr_controls','reset'}}
+    items[#items+1]={title='重置：跟随显示器默认值',value={'script-message-to','hdr_controls','reset'}}
     items[#items+1]={title='参数仅本次运行有效；不改原盘、不转码',selectable=false,muted=true,value={'ignore'}}
     local data={type='hdr-controls',title='HDR / Dolby Vision / 色调映射',items=items}
     mp.set_property_native('user-data/hdr-menu',data)
@@ -151,12 +151,12 @@ mp.register_script_message('set',function(key,value)
     mp.msg.warn('Rejected unsupported HDR option/value')
 end)
 mp.register_script_message('mode',function(value)
-    if value~='g614-sdr' and value~='display-auto' then return end
+    if value~='sdr-reference' and value~='display-auto' then return end
     mode=value;overrides['target-peak']=nil;overrides['icc-profile-auto']=nil
     snapshot();schedule();mp.add_timeout(0.12,menu)
 end)
 mp.register_script_message('reset',function()
-    overrides={};mode='g614-sdr'
+    overrides={};mode='display-auto'
     for key,value in pairs(defaults) do if value then set(key,value) end end
     snapshot();schedule();mp.add_timeout(0.12,menu)
 end)
