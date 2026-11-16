@@ -51,3 +51,8 @@ yarn-error.log*
 verification/
 *.patch
 *.bundle
+
+__pycache__/
+*.pyc
+windows/native-dv/dovi_tool/
+windows/native-dv/rpu_adapter/target/

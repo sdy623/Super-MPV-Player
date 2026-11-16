@@ -255,7 +255,7 @@ key script-message open_add_source_menu
 #Linux下示例
 /home/tony/Downloads/example.xml
 #Windows下示例
-C:\Users\Tony\Downloads\example.xml
+%USERPROFILE%\Downloads\example.xml
 ```
 
 现已更新增强了此菜单。现在在该菜单内可以可视化地控制所有弹幕源，删除或者屏蔽任何不想要的弹幕源。对于自己手动添加的弹幕源，可以进行移除。对于来自弹弹play的弹幕源，无法进行移除，但是可以进行屏蔽，将不会再从屏蔽过的弹幕源获取弹幕。当然，也可以解除对来自弹弹play的弹幕源的屏蔽。另外需要注意在菜单内对于弹幕源的可视化操作都需要下次打开视频，或者重新用弹幕搜索功能加载一次弹幕才会生效。

@@ -1,10 +1,7 @@
--- Reopen Windows audio output after device changes; an optional preferred device is configurable.
+-- Follow the Windows default endpoint; explicit MiniFuse modes retain hotplug recovery.
 -- This build's internal ao-reload command is regression-tested in the repair pack.
-local o={enabled=true,preferred_name='',preferred_channel=''}
-require('mp.options').read_options(o,'audio-router')
-if not o.enabled then return end
 local expected=mp.get_property('audio-device','auto')
-local mode=o.preferred_name~='' and 'prefer-device' or 'system-default'
+local mode='system-default'
 local loaded=false
 local description=''
 local status='starting'
@@ -22,14 +19,11 @@ local function catalog()
     return mp.get_property_native('audio-device-list',{})
 end
 local function find_main(devices)
-    if o.preferred_name=='' then return nil end
-    local name=o.preferred_name:lower():gsub('%s+','')
-    local channel=o.preferred_channel:lower():gsub('%s+','')
     local matches={}
     for _,device in ipairs(devices) do
         local label=(device.description or ''):lower():gsub('%s+','')
-        if (device.name or ''):match('^wasapi/') and label:find(name,1,true)
-            and label:find(channel,1,true) then
+        if (device.name or ''):match('^wasapi/') and label:find('minifuse',1,true)
+            and label:find('main1/2',1,true) then
             matches[#matches+1]=device
         end
     end
@@ -41,7 +35,7 @@ local function exists(name,devices)
     return false
 end
 local function target(devices)
-    if mode~='prefer-device' then return expected end
+    if mode~='prefer-minifuse' then return expected end
     local device=find_main(devices)
     return device and device.name or 'auto'
 end
@@ -52,7 +46,8 @@ local function has_audio()
     return false
 end
 local function healthy()
-    return mp.get_property('current-ao')=='wasapi'
+    local ao=mp.get_property('current-ao')
+    return ao=='wasapi' or ao=='asio'
 end
 local function publish()
     mp.set_property_native('user-data/audio-routing',{
@@ -109,13 +104,13 @@ local function recover_output(force,slow)
 end
 local function route(why,force,show)
     local devices=catalog()
-    local device=mode=='prefer-device' and find_main(devices) or nil
+    local device=mode=='prefer-minifuse' and find_main(devices) or nil
     local next_target=target(devices)
     local changed=mp.get_property('audio-device','auto')~=next_target
     expected=next_target -- Set before assigning, so our notification is not manual.
     reason=why
-    if mode=='prefer-device' then
-        description=device and device.description or '系统默认输出（偏好设备暂不可用）'
+    if mode=='prefer-minifuse' then
+        description=device and device.description or '系统默认输出（MiniFuse 主输出暂不可用）'
     elseif mode=='system-default' then description='系统默认输出'
     else description=expected end
     if changed then mp.set_property('audio-device',expected) end
@@ -175,7 +170,7 @@ mp.add_hook('on_load',2,function()
     loaded=false
     cancel_retry()
     exhausted=false
-    if mode=='manual' and not exists(expected,catalog()) then mode='prefer-device' end
+    if mode=='manual' and not exists(expected,catalog()) then mode='system-default'; expected='auto' end
     route('file-loading',false,false)
 end)
 mp.register_event('file-loaded',function()
@@ -197,13 +192,13 @@ mp.add_periodic_timer(2,function()
     else route('health-check',false,false) end
 end)
 mp.register_script_message('select-minifuse',function(which)
-    mode='prefer-device'
-    mp.set_property_bool('audio-exclusive',which=='exclusive')
+    mode='prefer-minifuse'
+    mp.commandv('apply-profile',which=='exclusive' and 'minifuse-exclusive' or 'minifuse-shared')
     route('minifuse-selected',true,true)
 end)
 mp.register_script_message('recover',function()
-    mode='prefer-device'
-    mp.set_property_bool('audio-exclusive',false)
+    mode='prefer-minifuse'
+    mp.commandv('apply-profile','minifuse-shared')
     route('user-recover',true,true)
     mp.set_property_bool('mute',false)
 end)
@@ -211,6 +206,7 @@ mp.register_script_message('system-default',function()
     mode='system-default'
     expected='auto'
     mp.set_property('audio-device','auto')
-    mp.set_property_bool('audio-exclusive',false)
+    mp.commandv('apply-profile','system-shared')
+    mp.commandv('script-message','audio-channel-system')
     route('system-default-selected',true,true)
 end)

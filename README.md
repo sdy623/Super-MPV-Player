@@ -1,3 +1,13 @@
+# MPV Open Edition — 开放版开发分支
+
+保留原主题、蓝光插件、章节与时间轴。Windows DV 视频处理和 Omniphony 对象音频分别选择，可同时使用。
+
+目前是源码预览；新版 NSIS 尚未发布。官方 Dolby 组件由用户从 Microsoft Store／设备厂商安装，检测通过后才尝试处理。安装存在不等于渲染成功。
+
+[开放版状态与依赖说明](docs/open-edition.md)
+
+---
+
 > **Anime / Blu-ray plugin fork:** [安装、子模块和上游补丁 / Setup, submodules and upstream patch](FORK.md).
 
 # mpv 和 mpv.net 播放器开箱即用配置文件&精美 UI 主题皮肤&常用插件（支持 Windows、macOS、Linux）
@@ -70,7 +80,7 @@
 
 ```
 Linux:   ~/.config/mpv/
-Windows: C:/Users/%username%/AppData/Roaming/mpv/
+Windows: %APPDATA%/mpv/
 macOS:   ~/Library/Application Support/mpv/
 ```
 

@@ -1,0 +1,20 @@
+[package]
+name = "mpv-windows-dv-rpu"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+dolby_vision = { path = "../dovi_tool/dolby_vision" }
+
+[profile.dev]
+debug = 0
+
+[profile.release]
+panic = "abort"
+strip = true
+
+[workspace]

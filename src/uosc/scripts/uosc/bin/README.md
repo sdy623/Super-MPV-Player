@@ -1,0 +1,1 @@
+Source-only edition: obtain the matching ziggy helper from the uosc maintainer when assembling a runtime. Executables are excluded from this repository branch; the installer must verify source, version and redistribution terms before including them.

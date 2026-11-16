@@ -51,7 +51,7 @@ For standard mpv installations using `setup-install` (not the `Portable` version
 
 ```
 Linux:   ~/.config/mpv/
-Windows: C:/Users/%username%/AppData/Roaming/mpv/
+Windows: %APPDATA%/mpv/
 macOS:   ~/Library/Application Support/mpv/
 ```
 

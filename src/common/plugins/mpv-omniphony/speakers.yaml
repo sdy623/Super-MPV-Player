@@ -1,0 +1,11 @@
+schema_version: 1
+render:
+  osc: false
+  channel_render_mode: host
+  current_layout:
+    radius_m: 1.0
+    speakers:
+      - {name: FL, coord_mode: cartesian, x: -1.0, y: 1.0, z: 0.0, spatialize: true, delay_ms: 0.0}
+      - {name: FR, coord_mode: cartesian, x: 1.0, y: 1.0, z: 0.0, spatialize: true, delay_ms: 0.0}
+  binaural:
+    output_mode: speaker_array

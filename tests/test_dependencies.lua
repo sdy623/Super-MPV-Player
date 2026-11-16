@@ -1,0 +1,12 @@
+local p=dofile(arg[1])
+assert(not p.windows({installed=false},true).available)
+assert(not p.windows({installed=true},false).available)
+local ready=p.windows({installed=true},true)
+assert(ready.available and not ready.processing and ready.state=='ready-unverified')
+assert(p.windows({installed=true},true,{state='processed',frames=2}).processing)
+assert(not p.windows({installed=true},true,{state='fallback',frames=2}).processing)
+assert(not p.omniphony(true,false).available)
+assert(p.omniphony(true,true).available)
+-- Audio/video choices are independent; neither mode replaces the other.
+assert(p.windows({installed=true},true).available and p.omniphony(true,true).available)
+print('PASS dependency presence, missing, processing, fallback and independent audio/video')

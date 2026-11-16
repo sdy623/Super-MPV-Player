@@ -1,0 +1,6 @@
+schema_version: 1
+render:
+  osc: false
+  channel_render_mode: host
+  binaural:
+    output_mode: binaural
