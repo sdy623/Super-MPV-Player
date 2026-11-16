@@ -6,6 +6,8 @@
 
 [开放版状态与依赖说明](docs/open-edition.md)
 
+Omniphony 为用户自行安装的可选组件：[引擎 / Studio 官方下载](https://github.com/mgth/Omniphony/releases/tag/v0.7.0) · [解码桥官方下载](https://github.com/harletty/harletty-bridge/releases/tag/v0.9.0)。保留 Studio 库优先；依赖不齐时继续原音频解码。
+
 ---
 
 > **Anime / Blu-ray plugin fork:** [安装、子模块和上游补丁 / Setup, submodules and upstream patch](FORK.md).

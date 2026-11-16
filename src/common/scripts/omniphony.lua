@@ -24,7 +24,7 @@ local function apply()
         if not saved then saved={ad=mp.get_property('ad',''),spdif=mp.get_property('audio-spdif','')} end
         mp.set_property('ad','')
         mp.set_property('ad-orender-config',root..mode..'.yaml')
-        mp.set_property('ad-orender-bridge-path',table.concat({root..'harletty_dolby_bridge.dll',root..'harletty_dts_bridge.dll',root..'harletty_iamf_bridge.dll'},';'))
+        -- Preserve user bridge options and upstream installed-component discovery.
         mp.set_property('ad-orender-channel-mode',spatialize and 'spatial' or 'host')
         mp.set_property('ad-orender-osc',studio and 'yes' or 'no')
         mp.set_property('ad-orender-osc-bind','127.0.0.1')
@@ -38,12 +38,12 @@ mp.register_script_message('select',function(value)
     if value~='off' and value~='headphones' and value~='speakers' then return end
     if value~='off' then
         if not mp.get_property_native('option-info/ad-orender-library') then mp.osd_message('当前后端没有 Omniphony；请使用融合核心',5);return end
-        for _,f in ipairs({'orender.dll','harletty_dolby_bridge.dll',value..'.yaml'}) do
+        for _,f in ipairs({value..'.yaml'}) do
             if not utils.file_info(root..f) then mp.osd_message('Omniphony 组件缺失：'..f,5);return end
         end
     end
     mode=value;apply()
-    local label=mode=='off' and '已恢复原音频解码' or mode=='headphones' and '已选择 Omniphony 耳机渲染；避免叠加 Windows 耳机空间音效' or '已选择 Omniphony 音箱渲染；请核对声道布局'
+    local label=mode=='off' and '已恢复原音频解码' or mode=='headphones' and '已请求 Omniphony 耳机渲染；需要外部引擎与解码桥' or '已请求 Omniphony 音箱渲染；需要外部引擎与解码桥'
     mp.osd_message(label,5)
 end)
 mp.register_script_message('spatialize-bed',function()
@@ -62,3 +62,24 @@ mp.register_event('file-loaded',publish)
 mp.observe_property('audio-codec','string',publish)
 mp.observe_property('current-ao','string',publish)
 publish()
+
+-- Optional components are installed by the user from their maintainers.
+local downloads={
+ ['download-studio']='https://github.com/mgth/Omniphony/releases/tag/v0.7.0',
+ ['download-bridges']='https://github.com/harletty/harletty-bridge/releases/tag/v0.9.0',
+}
+for command,url in pairs(downloads) do
+ mp.register_script_message(command,function()mp.commandv('run','rundll32.exe','url.dll,FileProtocolHandler',url)end)
+end
+mp.enable_messages('error')
+mp.register_event('log-message',function(event)
+ if mode=='off' or not (event.prefix=='ad' or tostring(event.prefix):find('orender',1,true)) then return end
+ local text=event.text or ''
+ if text:find('liborender unavailable',1,true) or text:find('orender_create failed',1,true) then
+  mp.add_timeout(0,function()
+   if mode=='off' then return end
+   mode='off';apply()
+   mp.osd_message('Omniphony 依赖未就绪，已恢复原音频解码；请从 HDR 与声音菜单安装引擎和解码桥，安装后重启播放器',6)
+  end)
+ end
+end)

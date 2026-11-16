@@ -75,7 +75,14 @@ local function snapshot()
 end
 local function apply()
     timer=nil
-    if mode=='sdr-reference' then
+    local inside=mp.get_property_native('user-data/windows-dv-inwindow',{})
+    if inside.windows_processed then
+        -- The frame processor returns device-referred SDR RGB with the system ICC.
+        -- Keep its matching target profile; do not map that SDR output to HDR again.
+        set('target-colorspace-hint','yes');set('target-colorspace-hint-mode','target')
+        set('target-trc','bt.1886');set('target-prim','bt.709');set('target-peak','203')
+        set('icc-profile-auto','yes')
+    elseif mode=='sdr-reference' then
         local src=mp.get_property_native('video-params',{})
         local hdr=src.gamma=='pq' or src.gamma=='hlg' or src.colormatrix=='dolbyvision'
         set('target-colorspace-hint',hdr and 'yes' or 'auto')
@@ -160,7 +167,12 @@ mp.register_script_message('reset',function()
     for key,value in pairs(defaults) do if value then set(key,value) end end
     snapshot();schedule();mp.add_timeout(0.12,menu)
 end)
-mp.observe_property('user-data/windows-dv-inwindow','native',function()snapshot()end)
+local processed_before=false
+mp.observe_property('user-data/windows-dv-inwindow','native',function(_,v)
+    local active=type(v)=='table' and v.windows_processed==true
+    if active~=processed_before then processed_before=active;schedule() end
+    snapshot()
+end)
 mp.observe_property('video-params','native',schedule)
 mp.observe_property('video-out-params','native',schedule)
 mp.register_event('file-loaded',function()media_active=true;snapshot();schedule()end)

@@ -34,7 +34,7 @@ local function enabled()
 end
 local function update()
  local adapter=utils.file_info(directory..'/windows-dv-frames.dll')~=nil and utils.file_info(directory..'/mpv_windows_dv_rpu.dll')~=nil
- available=core_available and policy.windows(dependency,adapter).available
+ available=core_available and policy.windows(dependency,adapter).available and dependency.screen_count==1 and dependency.output_icc~=nil and dependency.output_icc~=""
  local on=enabled()
  local meta=on and mp.get_property_native('vf-metadata/'..label,{}) or {}
  if mp.get_property_bool('idle-active',false) then meta={} end
@@ -70,7 +70,7 @@ local function set_enabled(wanted)
  local refresh=wanted and not enabled() and known_hlg and mp.get_property_bool('pause',false)
  local at=refresh and mp.get_property_number('time-pos')
  local ok,err=true,nil
- if wanted and not enabled() then ok,err=mp.commandv('vf','add','@'..label..':windows-dv=dll=%'..#dll..'%'..dll)
+ if wanted and not enabled() then ok,err=mp.commandv('vf','add','@'..label..':windows-dv=dll=%'..#dll..'%'..dll..(dependency.output_icc and dependency.output_icc~='' and ':output-icc=%'..#dependency.output_icc..'%'..dependency.output_icc or ''))
  elseif not wanted and enabled() then ok,err=mp.commandv('vf','remove','@'..label) end
  if ok and at then mp.commandv('seek',at,'absolute+exact') end
  if not ok then mp.osd_message('Windows处理切换失败：'..tostring(err),4) end
@@ -97,6 +97,7 @@ local function detect_dependencies()
    local parsed=ok and result and result.status==0 and utils.parse_json(result.stdout or '')
    dependency=type(parsed)=='table' and parsed or {installed=false,state='probe-failed'}
    update()
+   if not available and enabled() then set_enabled(false) end
    if available and options.auto_enable then set_enabled(true) end
   end)
 end

@@ -5,10 +5,19 @@ Video and audio are independent choices. Windows Dolby video processing may run 
 ## Windows dependency
 Use Microsoft Store or the device manufacturer to install a compatible licensed Dolby Vision extension. No Dolby extension binary, Store package, private credential or display ICC is supplied. `windows/native-dv/Detect-Dependencies.ps1` checks the current user's Store-signed package identity and status. Detection is not entitlement verification, support for every DV profile, or evidence of processing. The filter's runtime frame counters and fallback state remain authoritative.
 
+The Windows-processing candidate currently requires a single display with a system ICC profile. It reads that profile at runtime instead of distributing a device-specific profile; other setups retain the original mapping.
+
 P7 MEL RPU is adapted in memory to the Windows P8-compatible boundary. P8.4 retains HLG signaling. FEL is rejected by this boundary and remains on the original renderer. The tested internal panel target is SDR; this is not certified native DV HDR output. The user's original media is not rewritten.
 
-## Omniphony
-The engine and decoder bridges have separate licenses. This source preview does not redistribute bridge DLLs. Install compatible components from their maintainers after reviewing their licenses; missing components leave the original decoder intact. Headphone rendering should not be stacked unintentionally with Windows headphone spatial rendering. PCM/DCP keeps its original decoder. Neither video mode changes audio mode nor audio mode changes video mode.
+## Omniphony: install the optional components yourself
+
+The player includes the integration, not the engine or decoder bridge DLLs. They have separate licenses. Review each maintainer's license before installing.
+
+- [Omniphony / Studio v0.7.0 — official download](https://github.com/mgth/Omniphony/releases/tag/v0.7.0): choose `omniphony-studio-egui_0.7.0_x64-setup.exe` (Studio only), then start Studio once so it deploys the engine. Do not replace this player with the upstream player. This player uses liborender ABI 0.12.
+- [harletty-bridge v0.9.0 — official download](https://github.com/harletty/harletty-bridge/releases/tag/v0.9.0): install the Windows x64 bridges separately; this pair uses bridge_api 0.6.x. Put the required `*_bridge.dll` files in `%LOCALAPPDATA%\omniphony\lib\`, or set your own `ad-orender-bridge-path`.
+- Restart the player, then choose a mode in **HDR 与声音 → Omniphony 对象音频**. The same menu contains the official download links.
+
+The upstream loader's behavior is preserved: without an explicit library override, a compatible Studio-deployed engine is preferred. The installer does not replace or reconfigure Studio. Missing or incompatible components keep the original audio decoder. Headphone rendering should not be stacked unintentionally with Windows headphone spatial rendering. PCM/DCP keeps its original decoder. Neither video mode changes audio mode nor audio mode changes video mode.
 
 ## Build and release status
 The exact integrated MPV source is in `core/mpv`; upstream revision pins are in `sources.lock.json`. Existing UI/config and plugin submodules are retained. Native bridge source is in `windows/native-dv`. See its build.cmd and RPU adapter instructions; Visual Studio and Windows SDK are build dependencies, not redistribution payloads.
