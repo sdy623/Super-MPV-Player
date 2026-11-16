@@ -2,7 +2,7 @@
 
 保留原主题、蓝光插件、章节与时间轴。Windows DV 视频处理和 Omniphony 对象音频分别选择，可同时使用。
 
-Windows 安装包与配套源码通过 [GitHub Releases](https://github.com/sdy623/mpv.config/releases) 提供；当前为 2.0.0-rc3 候选版。官方 Dolby 组件由用户从 Microsoft Store／设备厂商安装，检测通过后才尝试处理。安装存在不等于渲染成功。
+Windows 安装包与配套源码通过 [GitHub Releases](https://github.com/sdy623/mpv.config/releases) 提供；当前为 [2.0.0 正式版](https://github.com/sdy623/mpv.config/releases/tag/v2.0.0-open)，包含 4K60 P8.4 GPU 杜比桥修复。官方 Dolby 组件由用户从 Microsoft Store／设备厂商安装，检测通过后才尝试处理。安装存在不等于渲染成功。
 
 [开放版状态与依赖说明](docs/open-edition.md)
 

@@ -7,6 +7,9 @@
 #endif
 #include <windows.h>
 #include <math.h>
+#include <d3d11.h>
+#include <libavutil/hwcontext.h>
+#include <libavutil/hwcontext_d3d11va.h>
 #include <libavutil/buffer.h>
 #include <libavutil/frame.h>
 #include <libavutil/rational.h>
@@ -24,6 +27,7 @@
 #include "wdv_frames.h"
 
 #define BATCH 6
+#define READY_CAP (BATCH * 2)
 struct opts { char *dll; char *output_icc; };
 typedef int (__cdecl *render_fn)(const wdv_frame_v2 *, uint32_t, uint32_t,
                                uint32_t, wdv_output_v2 *, char *, uint32_t);
@@ -31,7 +35,12 @@ typedef void *(__cdecl *create_fn)(void);
 typedef void *(__cdecl *create_hlg_fn)(uint32_t,uint32_t,uint32_t);
 typedef void (__cdecl *destroy_fn)(void*);
 typedef int (__cdecl *render3_fn)(void*,const wdv_frame_v2*,uint32_t,uint32_t,uint32_t,wdv_output_v2*,char*,uint32_t);
+typedef void* (__cdecl *create_gpu_fn)(void*,uint32_t,uint32_t,uint32_t);
+typedef int (__cdecl *render_gpu_fn)(void*,const wdv_frame_v2*,const wdv_gpu_frame_v5*,uint32_t,uint32_t,uint32_t,wdv_output_v2*,char*,uint32_t);
 struct priv {
+    create_gpu_fn create_gpu;render_gpu_fn render_gpu;void*gpu_session;
+    AVBufferRef *gpu_pool;ID3D11Device *gpu_device;AVRational gpu_fps;unsigned gpu_chroma;
+    wdv_gpu_frame_v5 gpu[BATCH];bool job_gpu;unsigned long long gpu_frames;
     struct opts *opts;
     HMODULE dll;
     AVBufferRef *output_icc;
@@ -39,7 +48,7 @@ struct priv {
     render_fn render;
     render3_fn render3; destroy_fn destroy3; void *session;
     create_hlg_fn create_hlg; void *hlg_session; bool job_hlg; AVRational hlg_fps; unsigned hlg_chroma;
-    struct mp_image *pending[BATCH], *ready[BATCH];
+    struct mp_image *pending[BATCH], *ready[READY_CAP];
     int count, ready_count, ready_pos;
     bool eof, failed, discard, job_pending;
     HANDLE worker;
@@ -132,7 +141,8 @@ static DWORD WINAPI render_worker(LPVOID context)
 {
     struct mp_filter *f=context;struct priv *p=f->priv;
     LARGE_INTEGER a,b,hz;QueryPerformanceFrequency(&hz);QueryPerformanceCounter(&a);
-    p->rc=(p->job_hlg?p->hlg_session:p->session)?p->render3(p->job_hlg?p->hlg_session:p->session,p->input,p->job_count,p->job_w,p->job_h,p->output,p->error,sizeof(p->error)):p->render(p->input,p->job_count,p->job_w,p->job_h,p->output,p->error,sizeof(p->error));
+    if(p->job_gpu)p->rc=p->render_gpu(p->gpu_session,p->input,p->gpu,p->job_count,p->job_w,p->job_h,p->output,p->error,sizeof(p->error));
+    else p->rc=(p->job_hlg?p->hlg_session:p->session)?p->render3(p->job_hlg?p->hlg_session:p->session,p->input,p->job_count,p->job_w,p->job_h,p->output,p->error,sizeof(p->error)):p->render(p->input,p->job_count,p->job_w,p->job_h,p->output,p->error,sizeof(p->error));
     QueryPerformanceCounter(&b);p->render_ms=1000.0*(b.QuadPart-a.QuadPart)/hz.QuadPart;
     InterlockedExchange(&p->done,1);mp_filter_wakeup(f);return 0;
 }
@@ -151,9 +161,15 @@ static void finish_batch(struct mp_filter *f)
         p->count=p->ready_count=p->ready_pos=0;p->eof=p->failed=p->discard=false;
         return;
     }
+    // Keep ordered GPU frames ahead of presentation. A completed single-frame
+    // job must not wait for the ready queue to empty before it can be published.
+    int kept=p->ready_count-p->ready_pos;
+    memmove(p->ready,p->ready+p->ready_pos,kept*sizeof(p->ready[0]));
+    memset(p->ready+kept,0,(READY_CAP-kept)*sizeof(p->ready[0]));
     for (int i = 0; ok && i < p->count; i++) {
         if (output[i].pts != input[i].pts) {ok=false;snprintf(error,sizeof(p->error),"renderer PTS mismatch");break;}
         // A successful renderer must supply opaque pixels, including black video.
+        if(p->job_gpu)continue; // GPU path validates exact PTS and successful TransferVideoFrame; no CPU pixel readback.
         size_t opaque=0;
         for(int y=0;y<h;y++)for(int x=0;x<w;x++)opaque+=rgb[i]->planes[0][y*rgb[i]->stride[0]+x*4+3]!=0;
         if(!opaque){ok=false;snprintf(error,sizeof(p->error),"renderer returned an empty/transparent surface");break;}
@@ -182,15 +198,15 @@ static void finish_batch(struct mp_filter *f)
             dst->params.primaries_orig=PL_COLOR_PRIM_BT_709;
             dst->params.transfer_orig=PL_COLOR_TRC_SRGB; dst->params.sys_orig=PL_COLOR_SYSTEM_RGB;
             dst->params.no_dovi=true; dst->params.no_enhancement_layer=true;
-            p->ready[i]=dst; rgb[i]=NULL; talloc_free(orig);
-        } else p->ready[i]=orig;
+            p->ready[kept+i]=dst; rgb[i]=NULL; talloc_free(orig);
+        } else p->ready[kept+i]=orig;
         mp_image_unrefp(&cpu[i]); mp_image_unrefp(&rgb[i]); p->pending[i]=NULL;
     }
     p->state=ok?"processed":(has_rpu||p->failed?"fallback":"passthrough");
-    if(ok){p->processed_frames+=p->count;p->failed=false;p->last_error[0]=0;}
+    if(ok){if(p->job_gpu)p->gpu_frames+=p->count;p->processed_frames+=p->count;p->failed=false;p->last_error[0]=0;}
     if (ok) MP_DBG(f,"Windows DV processed %d paired frames %.6f..%.6f in MPV; output SDR BGRA.\n",
-                   p->count,p->ready[0]->pts,p->ready[p->count-1]->pts);
-    p->ready_count=p->count; p->ready_pos=0; p->count=0;
+                   p->count,p->ready[kept]->pts,p->ready[kept+p->count-1]->pts);
+    p->ready_count=kept+p->count; p->ready_pos=0; p->count=0;
 }
 
 static void begin_batch(struct mp_filter *f)
@@ -203,6 +219,20 @@ static void begin_batch(struct mp_filter *f)
     bool ok = p->render || p->session;
     int w = p->pending[0]->w, h = p->pending[0]->h;
     bool has_rpu = false;
+    struct mp_image *first=p->pending[0];
+    // Opt in only for the measured high-frame-rate HLG hardware path; P7 stays unchanged.
+    p->job_gpu=p->create_gpu && p->render_gpu && first->imgfmt==IMGFMT_D3D11 && first->params.hw_subfmt==IMGFMT_P010 && first->hwctx && first->params.transfer_orig==PL_COLOR_TRC_HLG && first->nominal_fps>=50;
+    if(p->job_gpu){
+        AVHWFramesContext *fc=(void*)first->hwctx->data;
+        AVHWDeviceContext *dc=(void*)fc->device_ref->data;
+        AVD3D11VADeviceContext *dd=dc->hwctx;
+        AVRational fps=av_d2q(first->nominal_fps,100000);unsigned chroma=first->params.chroma_location==PL_CHROMA_TOP_LEFT;
+        if(p->gpu_session && (p->gpu_device!=dd->device || av_cmp_q(fps,p->gpu_fps) || chroma!=p->gpu_chroma)){p->destroy3(p->gpu_session);p->gpu_session=NULL;}
+        if(!p->gpu_session){p->gpu_device=dd->device;p->gpu_fps=fps;p->gpu_chroma=chroma;p->gpu_session=p->create_gpu(dd->device,fps.num,fps.den,chroma);}
+        ok=p->gpu_session && mp_update_av_hw_frames_pool(&p->gpu_pool,fc->device_ref,IMGFMT_D3D11,IMGFMT_BGRA,w,h,false);
+        if(!ok)snprintf(p->error,sizeof(p->error),"GPU Windows DV session/pool unavailable");
+    }
+
     for (int i = 0; ok && i < p->count; i++) {
         struct mp_image *img = p->pending[i], *el = img->enhancement_layer;
         AVBufferRef *rpu = raw_rpu(el ? el : img);
@@ -222,8 +252,8 @@ static void begin_batch(struct mp_filter *f)
             unsigned chroma=img->params.chroma_location==PL_CHROMA_TOP_LEFT;
             AVRational fps=av_d2q(img->nominal_fps,100000);
             if(p->hlg_session && (av_cmp_q(fps,p->hlg_fps) || chroma!=p->hlg_chroma)) {p->destroy3(p->hlg_session);p->hlg_session=NULL;}
-            if(!p->hlg_session){p->hlg_fps=fps;p->hlg_chroma=chroma;p->hlg_session=p->create_hlg(fps.num,fps.den,chroma);}
-            if(!p->hlg_session){snprintf(p->error,sizeof(p->error),"HLG session creation failed");ok=false;break;}
+            if(!p->job_gpu && !p->hlg_session){p->hlg_fps=fps;p->hlg_chroma=chroma;p->hlg_session=p->create_hlg(fps.num,fps.den,chroma);}
+            if(!p->job_gpu && !p->hlg_session){snprintf(p->error,sizeof(p->error),"HLG session creation failed");ok=false;break;}
         } else if (rpu && img->params.transfer_orig!=PL_COLOR_TRC_PQ) {
             snprintf(p->error,sizeof(p->error),"unsupported original BL transfer");ok=false;break;
         }
@@ -231,17 +261,23 @@ static void begin_batch(struct mp_filter *f)
         if (!rpu || img->pts == MP_NOPTS_VALUE || !isfinite(img->pts) ||
             img->w != w || img->h != h || w > 3840 || h > 2160 ||
             (el && (el->pts == MP_NOPTS_VALUE || fabs(el->pts-img->pts)>1e-6))) { ok = false; break; }
-        cpu[i] = p010(img); rgb[i] = mp_image_alloc(IMGFMT_BGRA, w, h);
-        if (!cpu[i] || !rgb[i]) { MP_WARN(f,"download/allocation failed cpu=%d rgb=%d\n",!!cpu[i],!!rgb[i]); ok = false; break; }
+        if(p->job_gpu){
+            if(img->imgfmt!=IMGFMT_D3D11 || !img->hwctx){ok=false;break;}
+            AVFrame *af=av_frame_alloc();
+            if(af && av_hwframe_get_buffer(p->gpu_pool,af,0)>=0)rgb[i]=mp_image_from_av_frame(af);
+            av_frame_free(&af);
+            if(rgb[i])p->gpu[i]=(wdv_gpu_frame_v5){img->planes[0],(uintptr_t)img->planes[1],rgb[i]->planes[0]};
+        }else{cpu[i] = p010(img); rgb[i] = mp_image_alloc(IMGFMT_BGRA, w, h);}
+        if ((!p->job_gpu && !cpu[i]) || !rgb[i]) { MP_WARN(f,"download/allocation failed cpu=%d rgb=%d\n",!!cpu[i],!!rgb[i]); ok = false; break; }
         double duration = img->pkt_duration;
         if (!(duration > 0)) duration = img->nominal_fps > 0 ? 1/img->nominal_fps : 1001.0/24000;
         input[i] = (wdv_frame_v2){
             .pts = llround(img->pts*10000000), .duration = llround(duration*10000000),
-            .y = cpu[i]->planes[0], .uv = cpu[i]->planes[1],
-            .stride_y = cpu[i]->stride[0], .stride_uv = cpu[i]->stride[1],
+            .y = p->job_gpu?NULL:cpu[i]->planes[0], .uv = p->job_gpu?NULL:cpu[i]->planes[1],
+            .stride_y = p->job_gpu?0:cpu[i]->stride[0], .stride_uv = p->job_gpu?0:cpu[i]->stride[1],
             .rpu = rpu->data, .rpu_len = rpu->size, .escaped = 1, .paired_el = !!el,
         };
-        output[i] = (wdv_output_v2){.pixels=rgb[i]->planes[0], .stride=rgb[i]->stride[0]};
+        output[i] = (wdv_output_v2){.pixels=p->job_gpu?NULL:rgb[i]->planes[0], .stride=p->job_gpu?0:rgb[i]->stride[0]};
     }
     p->job_count=p->count;p->job_w=w;p->job_h=h;p->job_rpu=has_rpu;p->job_ok=ok;
     p->rc=-1;p->job_pending=true;InterlockedExchange(&p->done,0);
@@ -257,9 +293,12 @@ static void begin_batch(struct mp_filter *f)
 static void process(struct mp_filter *f)
 {
     struct priv *p=f->priv;
-    // At most two bounded batches: drain one while rendering the next.
-    // Do not wait until presentation exhausts the ready queue to start work.
-    if(p->job_pending&&p->ready_pos>=p->ready_count&&InterlockedCompareExchange(&p->done,0,0)){
+    // GPU work is single-frame after priming, with ~100ms of ordered output
+    // prefetch. This absorbs bounded MediaEngine transfer stalls on resume.
+    // CPU/P7 keeps its original batch/drain ordering. No timestamps are changed.
+    int buffered=p->ready_count-p->ready_pos;
+    bool room=p->job_gpu ? buffered+p->job_count<=READY_CAP : buffered==0;
+    if(p->job_pending&&room&&InterlockedCompareExchange(&p->done,0,0)){
         if(p->worker){WaitForSingleObject(p->worker,INFINITE);CloseHandle(p->worker);p->worker=NULL;}
         p->job_pending=false;finish_batch(f);
     }
@@ -267,7 +306,8 @@ static void process(struct mp_filter *f)
         struct mp_image *img=p->ready[p->ready_pos];p->ready[p->ready_pos++]=NULL;
         mp_pin_in_write(f->ppins[1],MAKE_FRAME(MP_FRAME_VIDEO,img));
     }
-    if(!p->job_pending){
+    // Reserve a whole batch even if the next input changes format.
+    if(!p->job_pending && (!p->gpu_session || p->ready_count-p->ready_pos<=READY_CAP-BATCH)){
         while(!p->eof&&p->count<BATCH){
             if(!mp_pin_out_request_data(f->ppins[0]))return;
             struct mp_frame fr=mp_pin_out_read(f->ppins[0]);
@@ -276,7 +316,7 @@ static void process(struct mp_filter *f)
             p->pending[p->count++]=fr.data;
             // Prime MediaEngine with the original batch, then bound HLG main-thread
             // download work to one frame so pause/menu commands are not delayed.
-            if(p->hlg_session && p->processed_frames &&
+            if((p->hlg_session || p->gpu_session) && p->processed_frames &&
                p->pending[p->count-1]->params.transfer_orig==PL_COLOR_TRC_HLG)break;
         }
         if(p->count)begin_batch(f);
@@ -286,9 +326,9 @@ static void process(struct mp_filter *f)
 static void reset(struct mp_filter *f)
 {
     struct priv *p=f->priv;
-    p->rpu_seen=p->processed_frames=0;p->paired_el=false;p->state="waiting";p->last_error[0]=0;
+    p->rpu_seen=p->processed_frames=p->gpu_frames=0;p->paired_el=false;p->state="waiting";p->last_error[0]=0;
     p->source_transfer=PL_COLOR_TRC_UNKNOWN;
-    for(int i=0;i<BATCH;i++)mp_image_unrefp(&p->ready[i]);
+    for(int i=0;i<READY_CAP;i++)mp_image_unrefp(&p->ready[i]);
     p->ready_count=p->ready_pos=0;
     if(p->job_pending){p->discard=true;return;}
     for(int i=0;i<BATCH;i++){mp_image_unrefp(&p->pending[i]);mp_image_unrefp(&p->ready[i]);mp_image_unrefp(&p->cpu[i]);mp_image_unrefp(&p->rgb[i]);}
@@ -298,7 +338,7 @@ static void destroy(struct mp_filter *f)
 {
     struct priv *p=f->priv;
     if(p->worker){WaitForSingleObject(p->worker,INFINITE);CloseHandle(p->worker);p->worker=NULL;}
-    p->job_pending=false;reset(f);av_buffer_unref(&p->output_icc);if(p->hlg_session)p->destroy3(p->hlg_session);if(p->session)p->destroy3(p->session);if(p->dll)FreeLibrary(p->dll);
+    p->job_pending=false;reset(f);if(p->gpu_session)p->destroy3(p->gpu_session);av_buffer_unref(&p->gpu_pool);av_buffer_unref(&p->output_icc);if(p->hlg_session)p->destroy3(p->hlg_session);if(p->session)p->destroy3(p->session);if(p->dll)FreeLibrary(p->dll);
 }
 static bool command(struct mp_filter *f,struct mp_filter_command *cmd)
 {
@@ -315,6 +355,8 @@ static bool command(struct mp_filter *f,struct mp_filter_command *cmd)
         p->source_transfer == PL_COLOR_TRC_PQ ? "pq" : "other-or-unknown");
     mp_tags_set_str(t,"windows-input-transfer",p->job_hlg?"HLG":"PQ");
     mp_tags_set_str(t,"output","SDR");
+    mp_tags_set_str(t,"frame-transport",p->job_gpu?"d3d11-gpu":"cpu-p010-bgra");
+    mp_tags_set_str(t,"gpu-frames",mp_tprintf(64,"%llu",p->gpu_frames));
     mp_tags_set_str(t,"last-render-ms",mp_tprintf(64,"%.3f",p->render_ms));
     mp_tags_set_str(t,"session-mode",p->session?"persistent":"legacy-batch");
     *(struct mp_tags **)cmd->res=t;return true;
@@ -335,6 +377,8 @@ static struct mp_filter *create(struct mp_filter *parent,void *options)
         if(p->dll)p->render=(render_fn)GetProcAddress(p->dll,"wdv_render_batch_v2");
     }
     if(p->dll){
+        p->create_gpu=(create_gpu_fn)GetProcAddress(p->dll,"wdv_create_gpu_v5");
+        p->render_gpu=(render_gpu_fn)GetProcAddress(p->dll,"wdv_render_gpu_v5");
         p->create_hlg=(create_hlg_fn)GetProcAddress(p->dll,"wdv_create_hlg_v4");
         create_fn create3=(create_fn)GetProcAddress(p->dll,"wdv_create_v3");
         p->render3=(render3_fn)GetProcAddress(p->dll,"wdv_render_v3");

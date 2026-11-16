@@ -43,7 +43,8 @@ local function update()
  local seen=tonumber(meta['rpu-seen']) or 0
  local frames=tonumber(meta['processed-frames']) or 0
  local dv=seen>0 or src.colormatrix=='dolbyvision' or out.colormatrix=='dolbyvision'
- local processed=on and frames>0 and out.pixelformat=='bgra' and (meta.state=='processed' or meta.state=='processing')
+ local gpu_output=out.pixelformat=='d3d11' and out['hw-pixelformat']=='bgra' and meta['frame-transport']=='d3d11-gpu' and (tonumber(meta['gpu-frames']) or 0)>0
+ local processed=on and frames>0 and (out.pixelformat=='bgra' or gpu_output) and (meta.state=='processed' or meta.state=='processing')
  local state=not on and 'off' or (meta.state or 'waiting')
  local hlg=meta['source-base-transfer']=='hlg'
  if meta['source-base-transfer'] and meta['source-base-transfer']~='other-or-unknown' then known_hlg=hlg end

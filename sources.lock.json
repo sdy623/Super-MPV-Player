@@ -9,12 +9,12 @@
   "bridge_api": "0.6",
   "asio_sdk": "496a0765b8bb9c26f764f22f9a9712a937177db2",
   "package_repository": "b84a7c7d3b14f24206d6c14bbab318937dd8a5bd",
-  "video_changes": "existing Windows DV P7/P8.4 source retained byte-for-byte; no upstream FEL dependency upgrade",
+  "video_changes": "P8.4 HLG 50+fps D3D11 GPU shared textures, keyed synchronization and bounded ordered prefetch; P7 CPU processing retained",
   "ffmpeg": "9.0.2",
   "libplacebo": "7.360.1",
   "dovi_tool": "614c816b6446dcd1dbaf433403d499a6026fbb5a",
-  "release_status": "windows-runtime-candidate",
-  "runtime_candidate": "2.0.0-rc3",
+  "release_status": "windows-2.0.0-release",
+  "runtime_candidate": "2.0.0",
   "configuration_merge": "e684f8c0137c2dc51f9cff32f0fed3d9255a1e15",
   "bluray_plugin": "12487ef077f42c417c56e74f09304e4273c6fac4"
 }
