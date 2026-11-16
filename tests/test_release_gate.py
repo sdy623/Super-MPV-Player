@@ -8,6 +8,14 @@ class ReleaseGateTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d)/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(body)
    return inspect_tree(Path(d))
+ def test_no_bundled_service_key_defaults(self):
+  import re
+  root=Path(__file__).resolve().parents[1]
+  for rel,key in [('src/common/scripts/uosc_danmaku/modules/options.lua','tmdb_api_key'),('src/uosc/scripts/uosc/main.lua','open_subtitles_api_key')]:
+   text=(root/rel).read_text(encoding='utf8')
+   match=re.search(r'(?m)^\s*'+key+r"""\s*=\s*(['"])([^'"\r\n]*)\1""",text)
+   self.assertIsNotNone(match,key)
+   self.assertEqual(match.group(2),'',key)
  def test_source_allowed(self): self.assertEqual(self.check('src/player.c',b'/* public source */'),[])
  def test_binary_rejected_even_renamed(self): self.assertTrue(self.check('src/image.txt',b'MZ\x00\x00test'))
  def test_dll_rejected(self): self.assertTrue(self.check('runtime/Dolby.dll',b'anything'))
