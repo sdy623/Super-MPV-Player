@@ -14,7 +14,7 @@ using System.Web.Script.Serialization;
 #else
 [assembly: System.Reflection.AssemblyInformationalVersion("2.2.0-open")]
 #endif
-[assembly: System.Reflection.AssemblyProduct("MPV Complete")]
+[assembly: System.Reflection.AssemblyProduct("Super-MPV-Player")]
 
 internal static class MpvAnimeLauncher
 {
@@ -246,7 +246,7 @@ internal static class MpvAnimeLauncher
         }
         catch (Exception ex)
         {
-            MessageBox.Show(ex.Message, "MPV 动漫播放器", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(ex.Message, "Super-MPV-Player", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 }

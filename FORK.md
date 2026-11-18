@@ -14,8 +14,8 @@ fork 组合右键菜单、快捷键和弹幕番名接口，并保留底部悬停
 Release 的 `uosc_macos-dark.zip` 等是**配置与完整插件源码包**，不含 mpv 可执行文件、Java、libaacs、MakeMKV、密钥或用户数据。使用带 LuaJIT / libbluray 的 Windows x64 mpv，展开到 `portable_config`，运行 `Setup-Plugins.ps1` 初始化 Python 与公开动漫数据库。蓝光后端按插件说明配置。已有定制配置请先备份并合并，不要直接覆盖。
 
 ```powershell
-git clone --recurse-submodules https://github.com/sdy623/mpv.config
-cd mpv.config
+git clone --recurse-submodules https://github.com/sdy623/Super-MPV-Player
+cd Super-MPV-Player
 npm ci
 $env:RELEASE_VERSION = 'v1.9.19-anime-bd.1'
 npm run build

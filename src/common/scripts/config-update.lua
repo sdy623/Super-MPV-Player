@@ -1,5 +1,5 @@
 -- github-release-checker.lua
--- 自动检查 sdy623/mpv.config 的 GitHub 最新 Release
+-- 自动检查 Super-MPV-Player 的 GitHub 稳定版
 --
 -- 安装：将本文件放到 mpv/scripts/ 目录
 -- 默认快捷键：Ctrl+Alt+U
@@ -7,8 +7,10 @@
 local mp = require 'mp'
 local utils = require 'mp.utils'
 
-local REPO = "sdy623/mpv.config"
+local PRODUCT = "Super-MPV-Player"
+local REPO = "sdy623/" .. PRODUCT
 local API_URL = "https://api.github.com/repos/" .. REPO .. "/releases/latest"
+local RELEASES_URL = "https://github.com/" .. REPO .. "/releases"
 
 local open_cmd_args = nil
 local pending_open = false   -- 防止重复延迟打开
@@ -148,8 +150,9 @@ local function open_url(url)
 end
 
 local function check_update()
-    mp.msg.info("正在检查 sdy623/mpv.config 更新……")
-    osd("正在检查 sdy623/mpv.config 更新……", 2)
+    local checking = "正在检查 " .. PRODUCT .. " 稳定版更新……"
+    mp.msg.info(checking)
+    osd(checking, 2)
 
     local latest = get_latest_release()
     if not latest then
@@ -178,7 +181,7 @@ local function check_update()
         if not pending_open then
             pending_open = true
             mp.add_timeout(4, function()
-                open_url("https://github.com/sdy623/mpv.config/releases")
+                open_url(RELEASES_URL)
                 pending_open = false
             end)
         end
@@ -200,17 +203,18 @@ local function show_config_version()
     local version = get_current_version() or 'unknown'
     local details = {
         version = version,
-        product = 'MPV Complete',
+        product = PRODUCT,
         ui_font = mp.get_property('osd-font'),
-        features = {'Segoe UI text', 'Windows DV GPU texture ring / HLG FP16',
-                    'DV seek pre-roll optimization', 'P7 + Blu-ray menus / chapters',
-                    'DCP XYZ + ICM / PCM', 'Optional Omniphony audio'},
+        features = {'Windows Dolby Vision: first on supported setups',
+                    'gpu-next: Dolby Vision to SDR / optional adaptive highlights',
+                    'Optional Omniphony: Atmos object audio to PCM',
+                    'Blu-ray menus, DCP XYZ/PCM and UOSC playback controls'},
         known_limit = 'Windows DV pause/resume may drop output frames',
     }
     mp.set_property_native('user-data/mpv-complete', details)
     version_overlay.res_x, version_overlay.res_y = 1280, 720
     version_overlay.data = [[{\an7\pos(38,38)\fnSegoe UI\fs25\bord1.5\shad0\1c&HFFFFFF&\3c&H202020&}]]
-        .. 'MPV Complete ' .. version .. [[\N\N]]
+        .. PRODUCT .. ' ' .. version .. [[\N\N]]
         .. table.concat(details.features, [[\N]]) .. [[\N\N]] .. details.known_limit
     version_overlay:update()
     if version_timeout then version_timeout:kill() end

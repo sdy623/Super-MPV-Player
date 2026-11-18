@@ -1,27 +1,27 @@
-# Open edition: Windows 2.2.0 pre-release
+# Super-MPV-Player: Windows 2.2.0 pre-release
 
-See the [release notes and known limits](release-2.2.0.md), and find public builds on [GitHub Releases](https://github.com/sdy623/mpv.config/releases).
+See the [release notes and known limits](release-2.2.0.md). Public builds are on [GitHub Releases](https://github.com/sdy623/Super-MPV-Player/releases).
 
-Video and audio are independent choices. Windows Dolby video processing may run together with Omniphony object audio. Omniphony does not implement Dolby Vision video.
-
-[Advanced Dolby Vision SDR Rendering (gpu-next)](advanced-dv-hdr-sdr.md) is the open mapping path for eligible Windows SDR-only displays. It does not require the optional Dolby extension below.
+On a compatible Windows setup, try Windows Dolby video processing first. [Advanced Dolby Vision SDR Rendering (gpu-next)](advanced-dv-hdr-sdr.md) is a separate open mode for eligible SDR-only displays. It needs no vendor extension and outputs SDR. Select it in the HDR menu for an open-path comparison. Omniphony is an independent audio choice and can run with either video path. See [profile and audio test coverage](playback-capabilities.md).
 
 ## Windows dependency
-Use Microsoft Store or the device manufacturer to install a compatible licensed Dolby Vision extension. No Dolby extension binary, Store package, private credential or display ICC is supplied. `windows/native-dv/Detect-Dependencies.ps1` checks the current user's Store-signed package identity and status. Detection is not entitlement verification, support for every DV profile, or evidence of processing. The filter's runtime frame counters and fallback state remain authoritative.
+Install a compatible licensed Dolby Vision extension via Microsoft Store or the device manufacturer to use the Windows renderer. The installer does not distribute the extension, credentials or a display ICC. `windows/native-dv/Detect-Dependencies.ps1` checks the current user's installed package identity and status. Confirm processing in the HDR menu using runtime frame counters and the fallback state; the package check and the player's status label do not establish entitlement, a vendor logo or native Dolby Vision output.
 
-The Windows-processing candidate currently requires a single display with a system ICC profile. It reads that profile at runtime instead of distributing a device-specific profile; other setups retain the original mapping.
+Windows processing also needs a single display with a system ICC profile and the player's compatible bridge. It can process eligible HEVC P5 via the `dvhe.05` entry and eligible HEVC P8 or adapted P7 via `dvhe.08`. P9/AVC and P10/AV1 stay on the open renderer; they are outside this Windows bridge. If the required component, display setup or stream is not supported, playback stays on the open renderer or falls back to it.
+
+The shipped `portable_config/script-opts/native_dv_controls.conf` sets `auto_enable=yes`, so the Windows-capable entry point attempts to select that route for eligible files. Ordinary fallback uses gpu-next. It does not select the separate Advanced SDR preset, which you can choose with **Ctrl+Alt+H**.
 
 P7 MEL RPU is adapted in memory to the Windows P8-compatible boundary. P7 FEL first reconstructs the synchronized BL+EL contribution through the ABI-matched GPU helper, quantizes that result to P010 and adapts the RPU for the same Windows boundary. If the helper or frame contract is unavailable, the unmodified BL/EL remains on gpu-next. P8.4 retains HLG signaling. The tested internal panel target is SDR; this is not certified native DV HDR output. The user's original media is not rewritten.
 
 ## Omniphony: install the optional components yourself
 
-The player includes the integration, not the engine or decoder bridge DLLs. They have separate licenses. Review each maintainer's license before installing.
+With a compatible engine and bridge, Omniphony can render supported object-audio tracks, including Dolby TrueHD or Dolby Digital Plus carrying Atmos. Choose binaural headphones or speaker output. The supplied speaker example is stereo; adapt its layout to your configured speakers and audio device. This is local audio rendering, not HDMI bitstream passthrough. The engine and decoder bridges are separate downloads with their own licenses.
 
 - [Omniphony / Studio v0.7.0 — official download](https://github.com/mgth/Omniphony/releases/tag/v0.7.0): choose `omniphony-studio-egui_0.7.0_x64-setup.exe` (Studio only), then start Studio once so it deploys the engine. Do not replace this player with the upstream player. This player uses liborender ABI 0.12.
 - [harletty-bridge v0.9.0 — official download](https://github.com/harletty/harletty-bridge/releases/tag/v0.9.0): install the Windows x64 bridges separately; this pair uses bridge_api 0.6.x. Put the required `*_bridge.dll` files in `%LOCALAPPDATA%\omniphony\lib\`, or set your own `ad-orender-bridge-path`.
 - Restart the player, then choose a mode in **HDR 与声音 → Omniphony 对象音频**. The same menu contains the official download links.
 
-The upstream loader's behavior is preserved: without an explicit library override, a compatible Studio-deployed engine is preferred. The installer does not replace or reconfigure Studio. Missing or incompatible components keep the original audio decoder. Headphone rendering should not be stacked unintentionally with Windows headphone spatial rendering. PCM/DCP keeps its original decoder. Neither video mode changes audio mode nor audio mode changes video mode.
+The upstream loader's behavior is preserved: without an explicit library override, a compatible Studio-deployed engine is preferred. The installer does not replace or reconfigure Studio. If the engine or bridge is unavailable, the player uses its normal decoder where one exists; IAMF requires a compatible bridge. Avoid stacking binaural output with Windows headphone spatial rendering. PCM/DCP keeps its original decoder.
 
 ## libfreemkv: user-managed optional backend
 

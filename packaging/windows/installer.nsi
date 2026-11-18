@@ -6,14 +6,18 @@ Unicode true
 !define PAYLOAD "..\payload"
 !endif
 !ifndef OUTPUT
-!define OUTPUT "..\dist\MPV-Complete-2.2.0-x64-Setup.exe"
+!define OUTPUT "..\dist\Super-MPV-Player-2.2.0-x64-Setup.exe"
 !endif
-!define PRODUCT "MPV Complete"
+!define PRODUCT "Super-MPV-Player"
+; The previous public builds use these same IDs for upgrades and uninstall.
 !define OWNER "MPVComplete-NSIS-v2"
 !define REGKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\MPVComplete.NSIS"
+!define LINK_MAIN "${PRODUCT}.lnk"
+!define LINK_ADVANCED "${PRODUCT} - Advanced DV to SDR.lnk"
+!define LINK_ORIGINAL "${PRODUCT} - Original Backend.lnk"
 Name "${PRODUCT}"
 OutFile "${OUTPUT}"
-InstallDir "D:\Apps\MPV-Complete"
+InstallDir "D:\Apps\Super-MPV-Player"
 InstallDirRegKey HKCU "${REGKEY}" "InstallLocation"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
@@ -21,12 +25,12 @@ SetCompressorDictSize 8
 SetDatablockOptimize on
 ShowInstDetails show
 ShowUninstDetails show
-BrandingText "MPV Complete - integrated media player"
+BrandingText "${PRODUCT}"
 Icon "${PAYLOAD}\installer\mpv-icon.ico"
 UninstallIcon "${PAYLOAD}\installer\mpv-icon.ico"
 VIProductVersion "2.2.0.0"
 VIAddVersionKey "ProductName" "${PRODUCT}"
-VIAddVersionKey "FileDescription" "Per-user MPV installer with no-console launcher"
+VIAddVersionKey "FileDescription" "${PRODUCT} Windows x64 Setup"
 VIAddVersionKey "FileVersion" "2.2.0.0"
 VIAddVersionKey "LegalCopyright" "Third-party components retain their respective licenses"
 Var TestMode
@@ -67,7 +71,7 @@ Function VerifyDestination
     System::Free $2
     ${If} $3 == 0
     ${OrIf} $1 != 0
-        StrCpy $InstallError "This build requires an English/ASCII installation folder for Blu-ray Java menus. Example: D:\Apps\MPV-Complete"
+        StrCpy $InstallError "This build requires an English/ASCII installation folder for Blu-ray Java menus. Example: D:\Apps\Super-MPV-Player"
         Goto reject
     ${EndIf}
     StrLen $0 $INSTDIR
@@ -128,17 +132,18 @@ Section "Player" SEC_PLAYER
     ${If} $TestMode == "1"
         StrCpy $Links "$INSTDIR\integration-test"
     ${Else}
-        StrCpy $Links "$SMPROGRAMS\MPV Complete"
+        StrCpy $Links "$SMPROGRAMS\${PRODUCT}"
     ${EndIf}
     CreateDirectory "$Links"
-    Delete "$Links\MPV Advanced DV HDR SDR.lnk"
-    CreateShortcut "$Links\MPV Complete.lnk" "$INSTDIR\MPV-Anime.exe" "" "$INSTDIR\MPV-Anime.exe" 0 SW_SHOWNORMAL
-    CreateShortcut "$Links\MPV Advanced DV to SDR.lnk" "$INSTDIR\MPV-Anime.exe" "--vo=gpu-next --target-colorspace-hint=yes --target-trc=auto --target-prim=auto --target-peak=auto --target-contrast=auto --hdr-reference-white=auto --icc-profile-auto=no --script-opts-append=native_dv_controls-auto_enable=no,advanced_color_management-start_mode=advanced-dv-to-sdr,advanced_color_management-advanced_reference=50e88c0" "$INSTDIR\MPV-Anime.exe" 0 SW_SHOWNORMAL
+    ; Leave previous-name shortcuts alone: they may point to a separate installation.
+    CreateShortcut "$Links\${LINK_MAIN}" "$INSTDIR\MPV-Anime.exe" "" "$INSTDIR\MPV-Anime.exe" 0 SW_SHOWNORMAL
+    ; mpv's key/value append takes exactly one entry, not a comma-separated list.
+    CreateShortcut "$Links\${LINK_ADVANCED}" "$INSTDIR\MPV-Anime.exe" "--vo=gpu-next --target-colorspace-hint=yes --target-trc=auto --target-prim=auto --target-peak=auto --target-contrast=auto --hdr-reference-white=auto --icc-profile-auto=no --script-opts-append=native_dv_controls-auto_enable=no --script-opts-append=advanced_color_management-start_mode=advanced-dv-to-sdr --script-opts-append=advanced_color_management-advanced_reference=50e88c0" "$INSTDIR\MPV-Anime.exe" 0 SW_SHOWNORMAL
     CreateShortcut "$Links\蓝光原盘文件夹.lnk" "$INSTDIR\MPV-Anime.exe" "--open-bd-folder" "$INSTDIR\MPV-Anime.exe" 0 SW_SHOWNORMAL
     CreateShortcut "$Links\蓝光光驱播放.lnk" "$INSTDIR\MPV-Anime.exe" "--open-bd-drive" "$INSTDIR\MPV-Anime.exe" 0 SW_SHOWNORMAL
-    CreateShortcut "$Links\MPV Original Backend.lnk" "$INSTDIR\MPV-Anime.exe" "--original-backend" "$INSTDIR\MPV-Anime.exe" 0 SW_SHOWNORMAL
+    CreateShortcut "$Links\${LINK_ORIGINAL}" "$INSTDIR\MPV-Anime.exe" "--original-backend" "$INSTDIR\MPV-Anime.exe" 0 SW_SHOWNORMAL
     ${If} $TestMode != "1"
-        CreateShortcut "$DESKTOP\MPV Complete.lnk" "$INSTDIR\MPV-Anime.exe" "" "$INSTDIR\MPV-Anime.exe" 0 SW_SHOWNORMAL
+        CreateShortcut "$DESKTOP\${LINK_MAIN}" "$INSTDIR\MPV-Anime.exe" "" "$INSTDIR\MPV-Anime.exe" 0 SW_SHOWNORMAL
         WriteRegStr HKCU "${REGKEY}" "DisplayName" "${PRODUCT}"
         WriteRegStr HKCU "${REGKEY}" "DisplayVersion" "2.2.0"
         WriteRegStr HKCU "${REGKEY}" "InstallLocation" "$INSTDIR"
@@ -165,20 +170,22 @@ Section "Uninstall"
     ${If} $TestMode == "1"
         StrCpy $Links "$INSTDIR\integration-test"
     ${Else}
-        StrCpy $Links "$SMPROGRAMS\MPV Complete"
+        StrCpy $Links "$SMPROGRAMS\${PRODUCT}"
         ReadRegStr $0 HKCU "${REGKEY}" "InstallLocation"
-        ${If} $0 == $INSTDIR
-            DeleteRegKey HKCU "${REGKEY}"
-            Delete "$DESKTOP\MPV Complete.lnk"
+        ${If} $0 != $INSTDIR
+            ; Do not remove shortcuts registered by another installed copy.
+            Goto app_metadata
         ${EndIf}
+        DeleteRegKey HKCU "${REGKEY}"
+        Delete "$DESKTOP\${LINK_MAIN}"
     ${EndIf}
-    Delete "$Links\MPV Complete.lnk"
-    Delete "$Links\MPV Advanced DV HDR SDR.lnk"
-    Delete "$Links\MPV Advanced DV to SDR.lnk"
-    Delete "$Links\MPV Original Backend.lnk"
+    Delete "$Links\${LINK_MAIN}"
+    Delete "$Links\${LINK_ADVANCED}"
+    Delete "$Links\${LINK_ORIGINAL}"
     Delete "$Links\蓝光原盘文件夹.lnk"
     Delete "$Links\蓝光光驱播放.lnk"
     RMDir "$Links"
+app_metadata:
     Delete "$INSTDIR\install-owner.ini"
     Delete "$INSTDIR\Uninstall.exe"
     ; No recursive deletion: preserve user settings, caches, and unknown files.

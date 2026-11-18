@@ -1,4 +1,4 @@
-# Windows candidate assembly
+# Super-MPV-Player Windows assembly
 
 The release uses one UCRT64 integrated core, with Windows processing and original-mapping entry points. No proprietary Dolby component, Omniphony engine/decoder bridge, libfreemkv helper, key database or device ICC is distributed.
 
@@ -15,9 +15,11 @@ These instructions and upstream recipes provide the source/build inputs; a fresh
 
 Create a separate task directory with `payload/`, `src/`, and `dist/`. Copy `make-files.py` to its root and `installer.nsi` to `src/`. Assemble the reviewed player runtime in `payload/`; the generator is not a downloader and does not fetch arbitrary binaries. Put the integrated core in the root, `windows-dv-experimental/` and `original-backend/`, with matching runtime DLLs. The native controls permit Windows processing only in the matching Windows-processing/root entry points. The `original-backend/` instance stays on MPV mapping.
 
-Use the version-matched portable configuration and plugin sources, Java/BD-J runtime and notices. Place the launcher source in `payload/package-source/` and the new release notes and feature guide in `payload/docs/`. In the release source checkout, get `$coreTree = git rev-parse HEAD:core/mpv`. In the assembly directory, run `python make-files.py --core-source-tree $coreTree`, then `makensis src/installer.nsi`. The generator records the core source tree, creates per-file install/uninstall lists, and rejects bundled Omniphony engine/bridges, the freemkv helper, device profiles and known private-state files. Verify the installed payload and exercise launch, upgrade and uninstall before publishing.
+Use the version-matched portable configuration and plugin sources, Java/BD-J runtime and notices. Preserve the previously packaged Windows uosc helper and Blu-ray launcher script with their corresponding source notices. Place the launcher source in `payload/package-source/` and the new release notes and feature guide in `payload/docs/`. In the release source checkout, get `$coreTree = git rev-parse HEAD:core/mpv`. In the assembly directory, run `python make-files.py --core-source-tree $coreTree`, then `makensis /INPUTCHARSET UTF8 src/installer.nsi`. The generator records the core source tree, creates per-file install/uninstall lists, and rejects bundled Omniphony engine/bridges, the freemkv helper, device profiles and known private-state files. Verify the installed payload and exercise launch, upgrade and uninstall before publishing.
 
 The NSIS `TESTMODE` switch writes shortcuts inside the test installation and avoids production shortcut/registry changes. The public installer requires an ASCII installation directory for this Java/BD-J combination. It does not change file associations or start playback automatically.
+
+Name the release assets `Super-MPV-Player-<version>-x64-Setup.exe`, `Super-MPV-Player-<version>-Source.zip`, and `Super-MPV-Player-<version>-Native-Sources.zip`. New installs default to `D:\Apps\Super-MPV-Player`. The prior install ID and registry key are retained to recognize upgrades; the installer does not remove shortcuts under the previous product name. The runtime filenames `mpv.exe`, `mpv.com`, and `MPV-Anime.exe` are unchanged.
 
 ## 2.1.0: patched libplacebo
 

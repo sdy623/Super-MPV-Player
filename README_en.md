@@ -1,18 +1,23 @@
-> **Anime / Blu-ray plugin fork:** [安装、子模块和上游补丁 / Setup, submodules and upstream patch](FORK.md).
+# Super-MPV-Player
 
-# Ready-to-Use Configuration Files, Elegant UI Themes & Useful Plugins for mpv and mpv.net (Windows, macOS, Linux)
+A Windows player built on mpv. Use the Windows Dolby Vision processor when available, or play Dolby Vision on an SDR-only screen with the open renderer.
 
-**Windows open edition 2.2.0 pre-release:** [release notes and known limits](docs/release-2.2.0.md) · [GitHub Releases](https://github.com/sdy623/mpv.config/releases).
+**Windows open edition 2.2.0 pre-release:** [Download](https://github.com/sdy623/Super-MPV-Player/releases) · [Release notes and known limits](docs/release-2.2.0.md) · [中文](README.md)
 
-**[Advanced Dolby Vision SDR Rendering (gpu-next)](docs/advanced-dv-hdr-sdr.md)** maps Dolby Vision video to Windows SDR-only displays using the open FFmpeg → mpv gpu-next → libplacebo path. The optional highlight refinement uses display headroom and scene brightness together, protecting large white fields and dark scenes from blanket brightening. The guide explains display eligibility, same-display A/B checks, ICC and expert 3D LUT calibration.
+- **[Windows Dolby Vision processing](docs/open-edition.md#windows-dependency).** The preferred video path on a compatible setup. Install the licensed component via Microsoft Store or the device manufacturer. The player attempts Windows processing for eligible streams and stays on gpu-next if it can't use it. Check the processed-frame count and fallback state in the HDR menu.
+- **[Advanced Dolby Vision SDR Rendering (gpu-next)](docs/advanced-dv-hdr-sdr.md).** Maps brightness and color using available Dolby Vision metadata on displays Windows reports as SDR-only. Optional adaptive highlights use display headroom and scene brightness, so large white fields and small highlights in dark scenes don't get a blanket boost. No Dolby extension is required; output is SDR, not a native Dolby Vision signal.
+- **Optional audio mode: [Omniphony object audio](docs/open-edition.md#omniphony-install-the-optional-components-yourself).** With compatible decoder bridges, render supported tracks such as Atmos for binaural headphones or your speaker layout. Install the engine and bridges separately. This audio mode works with either video mode.
+- **Blu-ray.** Open optical discs, ISOs or BDMV folders and use compatible BD-J menus. Encrypted discs need a user-configured backend; no keys are bundled.
+- **Unencrypted 2D DCP.** Use the CPL to pair picture with PCM audio and show Reel boundaries as chapters. The XYZ picture uses floating-point gpu-next processing and display ICM. KDM and DCP subtitles aren't supported.
+- **UOSC playback controls.** The timeline has thumbnails and chapters. The `i` panel shows source color, scene luminance, DV metadata status and the effective renderer. DV thumbnails use the compatible base layer when available.
 
-> The configuration file of the mpv player supports Windows, macOS, Linux, with a consistent context menu feature across all platforms.
+[Dolby Vision profiles and object-audio test coverage](docs/playback-capabilities.md)
 
-#### [中文](https://github.com/akFace/mpv.config/blob/master/README.md) | English
+> **Anime / Blu-ray plugin fork:** [Setup, submodules and upstream patch](FORK.md).
 
-- Note: This document was translated by `AI-translated` and may contain some inaccuracies.
+## Upstream themes and standalone configuration
 
-## Overview
+The notes below cover the inherited cross-platform themes and configuration. The Windows features described above require the integrated installer; upstream mpv builds and configuration ZIPs do not include the modified playback core.
 
 - Two themes, `modernz` and `uosc`, featuring a beautiful modern UI with a borderless design
 - Uses the native mpv player with configuration and player kept separate, so you do not need to worry about the player being unable to update to the latest version
@@ -27,7 +32,7 @@
 - Powerful and consistent context menu functionality across Windows, macOS, and Linux
 - Lightweight and extremely simple, with just two steps to get started
 
-## Installation
+## Installing the standalone configuration
 
 - First, install a player: **Windows:** [Official builds - Recommended](https://github.com/mpv-player/mpv/releases), [Daily builds - Recommended](https://github.com/zhongfly/mpv-winbuild/releases), [shinchiro builds](https://github.com/shinchiro/mpv-winbuild-cmake/releases), or [mpv.net builds](https://github.com/mpvnet-player/mpv.net/releases). **macOS, Linux:** [Download mpv from the official website](https://mpv.io/installation/)
 - [🎯 Click here to download](https://github.com/akFace/mpv.config/releases) the theme you want (`modernz` or `uosc`). Each archive already contains a complete functional configuration. Extract it after downloading.
@@ -74,7 +79,7 @@ macOS:   ~/Library/Application Support/mpv/
 - Skip intros and outros: Open `mpv.conf` in the configuration folder. You will find commented-out settings for skipping intros and outros. Remove the `#` symbols and enter your custom intro/outro times, then restart the player.
 - **Recommended:** Tampermonkey script 👉 [play-with-mpv - Play videos from web pages with mpv](https://github.com/akFace/play-with-mpv)
 
-## How to Update to the Latest Version
+## Updating the standalone configuration
 
 - Player update: Simply download and install the latest [🎬 mpv.net player](https://github.com/mpvnet-player/mpv.net/releases) or [mpv player](https://mpv.io/).
 - Configuration/theme update: Simply [🎯 download the latest version](https://github.com/akFace/mpv.config/releases), extract it, and overwrite the existing files. (Back up your files before overwriting)

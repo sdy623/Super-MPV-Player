@@ -1,6 +1,6 @@
 # Advanced Dolby Vision SDR Rendering (gpu-next)
 
-Get more out of a bright SDR screen without turning the whole picture up. This Windows feature maps Dolby Vision video to the current display's usable SDR range. With the optional refinement, its main advantage is **selective brightness**: scenes can keep useful highlight separation without pushing large white fields and small highlights in dark scenes too far.
+The open renderer in Super-MPV-Player maps Dolby Vision video to the current SDR screen. Its optional highlight refinement uses both display headroom and the brightness distribution in the image. An eligible shot can gain highlight separation while large white fields and small highlights in dark scenes keep their balance.
 
 The open rendering path uses FFmpeg, mpv gpu-next and libplacebo. It uses available Dolby Vision picture metadata (RPU), then tone-maps and gamut-maps the image to an SDR output. It needs no Dolby extension and sends no native Dolby Vision signal to the display. The [optional Windows Dolby renderer](open-edition.md#windows-dependency) is a separate path and may produce a different image.
 

@@ -1,25 +1,25 @@
-# MPV Complete — 综合播放器开放版
+# Super-MPV-Player
 
-保留原主题、蓝光插件、章节与时间轴。Windows DV 视频处理和 Omniphony 对象音频分别选择，可同时使用。
+基于 mpv 的 Windows 播放器。可使用系统 Dolby Vision 组件处理视频，也能在仅支持 SDR 的屏幕上用开放渲染路径播放 Dolby Vision。
 
-当前源码为 **Windows 2.2.0 开放预览版**。见[版本说明与已知限制](docs/release-2.2.0.md)，下载入口为 [GitHub Releases](https://github.com/sdy623/mpv.config/releases)。开放 gpu-next 路径无需官方 Dolby 组件；可选的 Windows Dolby 路径需通过 Microsoft Store 或设备厂商安装兼容组件。
+**Windows 2.2.0 开放预览版**：[下载](https://github.com/sdy623/Super-MPV-Player/releases) · [版本说明与已知限制](docs/release-2.2.0.md) · [English](README_en.md)
 
-[开放版状态与依赖说明](docs/open-edition.md)
+- **[Windows Dolby Vision 处理](docs/open-edition.md#windows-dependency)。** 有兼容环境时优先使用。安装 Microsoft Store 或设备厂商提供的授权组件后，播放器会尝试处理符合条件的输入。未能接管时，视频留在 gpu-next。以 HDR 菜单里的处理帧数和回退状态为准。
+- **[Advanced Dolby Vision SDR Rendering (gpu-next)](docs/advanced-dv-hdr-sdr.md)。** 面向 Windows 识别为仅支持 SDR 的屏幕，按显示能力和片源元数据映射亮度与色域。可选的自适应高光根据屏幕余量和场景决定何时加亮，也会约束大面积白和暗场小高光。无需 Dolby 扩展，显示链路只输出 SDR。
+- **可选音频模式：[Omniphony 对象音频](docs/open-edition.md#omniphony-install-the-optional-components-yourself)。** 使用兼容解码桥，将受支持的 Atmos 等音轨渲染为双耳耳机或按音箱布局输出。引擎与解码桥须自行安装；音频可搭配任一视频模式。
+- **蓝光原盘。** 打开光驱、ISO 或 BDMV 文件夹，可使用兼容的 BD-J 原盘菜单。加密光盘需要自行配置可用的解密后端；安装包不含密钥。
+- **无加密 2D DCP。** 从 CPL 配对画面和 PCM 音轨，按 Reel 分章。XYZ 画面经 gpu-next 浮点处理和显示器 ICM 输出；不支持 KDM 或 DCP 字幕。
+- **UOSC 播放界面。** 时间轴提供缩略图和章节，`i` 面板可查源色彩、场景亮度、DV 元数据状态与实际渲染路径。有兼容基础层的 DV 缩略图从基础层生成。
 
-[Advanced Dolby Vision SDR Rendering (gpu-next)](docs/advanced-dv-hdr-sdr.md) 面向 Windows 识别为仅支持 SDR 的屏幕。开放路径用可用的 Dolby Vision 元数据做亮度与色域映射，最终输出 SDR，无需 Windows Dolby 扩展。可选的自适应高光根据屏幕余量和画面亮度分布分配亮度：有细节的高光可以更亮，大面积白和暗场小高光不一味推亮。指南说明适用屏幕、同屏对照、ICC 与专业 3D LUT 工作流。
-
-Omniphony 为用户自行安装的可选组件：[引擎 / Studio 官方下载](https://github.com/mgth/Omniphony/releases/tag/v0.7.0) · [解码桥官方下载](https://github.com/harletty/harletty-bridge/releases/tag/v0.9.0)。保留 Studio 库优先；依赖不齐时继续原音频解码。
+[Dolby Vision Profile 和对象音频的实测范围](docs/playback-capabilities.md)
 
 ---
 
 > **Anime / Blu-ray plugin fork:** [安装、子模块和上游补丁 / Setup, submodules and upstream patch](FORK.md).
 
-# mpv 和 mpv.net 播放器开箱即用配置文件&精美 UI 主题皮肤&常用插件（支持 Windows、macOS、Linux）
+## 上游主题与独立配置包
 
-> - mpv 配置文件支持 Windows、macOS、Linux，全平台带有一致的右键菜单功能
-> - The configuration file of the mpv player supports Windows, macOS, Linux, with a consistent context menu feature across all platforms.
-
-#### 中文 | [English](https://github.com/akFace/mpv.config/blob/master/README_en.md)
+以下为沿用的跨平台主题与配置说明。Windows 开放版的修改内核和功能请使用上方的安装包；上游 mpv 或单独的配置 ZIP 不包含这些修改。
 
 ## 简要说明
 
@@ -38,7 +38,7 @@ Omniphony 为用户自行安装的可选组件：[引擎 / Studio 官方下载](
 - [>>查看主题预览效果截图](https://github.com/akFace/mpv.config#%E9%A2%84%E8%A7%88%E6%95%88%E6%9E%9C%E5%9B%BE)
 - [>>常见相关问题](https://github.com/akFace/mpv.config#一些常用设置文档可选)
 
-## 使用方法
+## 独立主题配置的使用方法
 
 ### 1. 先安装播放器
 
@@ -106,7 +106,7 @@ macOS:   ~/Library/Application Support/mpv/
 - **推荐：** 油猴脚本 👉 [play-with-mpv 使用 mpv 播放网页中的视频](https://github.com/akFace/play-with-mpv)
 - **语言/language:** The language setting for the modernz theme is in `script-opts/modernz.conf`, and the language setting for the uosc theme is in `script-opts/uosc.conf`. You can see it by searching for the keyword `language` in the file.，Download [`input-en.conf`](https://github.com/akFace/mpv.config/blob/master/src/input-en.conf) and rename it to `input.conf`, then replace the original file
 
-## 如何更新到最新版
+## 如何更新独立主题配置
 
 - 播放器更新：直接下载最新版[🎬[mpv.net 播放器]](https://github.com/mpvnet-player/mpv.net/releases) 或者[[mpv 原生播放器]](https://mpv.io/)安装即可
 - 配置主题皮肤更新：直接下载最新版[🎯 点击下载](https://github.com/akFace/mpv.config/releases) 解压覆盖即可
