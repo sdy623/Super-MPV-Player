@@ -11,7 +11,19 @@ A Windows player built on mpv. Use the Windows Dolby Vision processor when avail
 - **Unencrypted 2D DCP.** Use the CPL to pair picture with PCM audio and show Reel boundaries as chapters. The XYZ picture uses floating-point gpu-next processing and display ICM. KDM and DCP subtitles aren't supported.
 - **UOSC playback controls.** The timeline has thumbnails and chapters. The `i` panel shows source color, scene luminance, DV metadata status and the effective renderer. DV thumbnails use the compatible base layer when available.
 
-[Dolby Vision profiles and object-audio test coverage](docs/playback-capabilities.md)
+### Dolby Vision support at a glance
+
+| Profile | Windows Dolby (preferred) | Open gpu-next |
+| --- | --- | --- |
+| **P5** · HEVC | ✓ Tested in an earlier build | Implemented, not retested |
+| **P7 MEL** · UHD Blu-ray | Implemented, no verified MEL sample | Implemented, no verified MEL sample |
+| **P7 FEL** · UHD Blu-ray | ✓ EL reconstruction tested earlier | ✓ EL reconstruction tested with pre-roll¹ |
+| **P8.1** · HDR10 base | ✓ Tested in an earlier build | Implemented, not retested |
+| **P8.4** · HLG base | ✓ Tested with Atmos in 2.2.0 | ✓ Tested in 2.2.0 |
+| **P9** · AVC / SDR base | Unsupported | Recognized; playback not validated |
+| **P10** · AV1 | Unsupported | Recognized; playback not validated |
+
+✓ marks a sample played on that path. ¹ The P7 FEL check used pre-roll to reach 80.080 s; a direct seek can still start late. [BL, EL, RPU and Atmos test details](docs/playback-capabilities.md)
 
 > **Anime / Blu-ray plugin fork:** [Setup, submodules and upstream patch](FORK.md).
 

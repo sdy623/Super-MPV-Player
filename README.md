@@ -11,7 +11,19 @@
 - **无加密 2D DCP。** 从 CPL 配对画面和 PCM 音轨，按 Reel 分章。XYZ 画面经 gpu-next 浮点处理和显示器 ICM 输出；不支持 KDM 或 DCP 字幕。
 - **UOSC 播放界面。** 时间轴提供缩略图和章节，`i` 面板可查源色彩、场景亮度、DV 元数据状态与实际渲染路径。有兼容基础层的 DV 缩略图从基础层生成。
 
-[Dolby Vision Profile 和对象音频的实测范围](docs/playback-capabilities.md)
+### Dolby Vision 支持一览
+
+| Profile | Windows Dolby（优先） | gpu-next 开放路径 |
+| --- | --- | --- |
+| **P5** · HEVC | ✓ 旧版实测 | 有处理路径，本版未测 |
+| **P7 MEL** · UHD Blu-ray | 有处理路径，未单独验证 MEL | 有处理路径，未单独验证 MEL |
+| **P7 FEL** · UHD Blu-ray | ✓ 旧版实测 EL 重建 | ✓ 本版实测 EL 重建，需预读¹ |
+| **P8.1** · HDR10 基础层 | ✓ 旧版实测 | 有处理路径，本版未测 |
+| **P8.4** · HLG 基础层 | ✓ 本版实测，含 Atmos 同播 | ✓ 本版实测 |
+| **P9** · AVC / SDR 基础层 | 不支持 | 可识别，本版未实播验收 |
+| **P10** · AV1 | 不支持 | 可识别，本版未实播验收 |
+
+✓ 表示对应路径有样本实播记录。¹ P7 FEL 的 80.080 秒同帧测试用了预读；直接跳转仍可能晚出帧。[BL／EL／RPU 与 Atmos 实测详情](docs/playback-capabilities.md)
 
 ---
 

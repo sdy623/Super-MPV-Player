@@ -12,7 +12,7 @@ BL 是基础图像层，EL 是增强层，RPU 携带重建和显示映射元数�
 | P7 MEL · HEVC | UHD Blu-ray HDR 兼容 PQ 基础层，另有 EL 和 RPU；无有效 EL 像素残差 | 有处理路径，本版未用独立确认的 MEL 样本复测 | 适配到 `dvhe.08`；旧版 P7 导航和配对测试未独立验证 MEL |
 | P7 FEL · HEVC | UHD Blu-ray HDR 兼容 PQ 基础层，另有 EL 和 RPU；有效残差须解码并配对 | 软件 HEVC + D3D11 验证一帧：预读后在 **80.080 秒**确认 FEL 配对与图像贡献 | 先用兼容 GPU 辅助模块重建，再量化为 P010 送往 `dvhe.08`；旧版有实播，辅助模块或帧条件不符时回退 |
 | P8.1 · HEVC | HDR10/PQ 兼容 BL + RPU，无 EL | 有处理路径，本版未用独立源复测 | 走 `dvhe.08`；旧版短测有实际 SDR 输出 |
-| P8.4 · HEVC | HLG 兼容 BL + RPU，无 EL | D3D11 硬解样本在 **87、95、100 秒**验证同帧输出；核对 HLG 源、DV/PQ 渲染输入及 BT.709/sRGB SDR 输出 | 走 `dvhe.08`，保留 HLG 输入语义；有实际 SDR 输出记录 |
+| P8.4 · HEVC | HLG 兼容 BL + RPU，无 EL | D3D11 硬解样本在 **87、95、100 秒**验证同帧输出；核对 HLG 源、DV/PQ 渲染输入及 BT.709/sRGB SDR 输出 | 2.2.0 短测由 `dvhe.08` 处理 **283 帧**并转交 283 份 RPU，保持 HLG 输入，输出 SDR；无回退 |
 | P9 · AVC | BT.709 SDR 兼容 BL + RPU，无 EL | 识别与路由有代码覆盖，本版未用实片验收 | 当前 HEVC 桥不支持 |
 | P10 · AV1 | BL + AV1 内的 DV 元数据，无 EL；CCID 0 无通用回退，1 对应 HDR10/PQ，4 对应 HLG | 开放路径可识别，本版未验收三种变体的实播 | 当前 HEVC 桥不支持 |
 
@@ -26,7 +26,7 @@ Windows 路径需满足[组件与显示条件](open-edition.md#windows-dependenc
 
 | 输入 | 实播记录 |
 | --- | --- |
-| E-AC-3 JOC / Dolby Digital Plus Atmos | [2.0.0 安装版](release-2.0.0.md#verification)已验证与 Windows P8.4 处理同播，含暂停恢复。 |
+| E-AC-3 JOC / Dolby Digital Plus Atmos | 2.2.0 与 Windows P8.4 同播短测：`orender` 识别 `LFE+15 objects`，WASAPI 输出 48 kHz 双声道浮点 PCM。暂停恢复见 [2.0.0 安装版记录](release-2.0.0.md#verification)。 |
 | TrueHD / Atmos | 旧候选的 P7 蓝光片段同时记录 Windows 处理、EL 配对和 `LFE+11 objects`。测试有暂停恢复和跳转，未覆盖全片。2.2.0 未重测这组。 |
 | 其他输入 | 核心有 AC-3、DTS 和 IAMF 的接入点；具体格式取决于引擎与桥，本版未做逐格式验收。PCM/DCP 保留原解码。 |
 
