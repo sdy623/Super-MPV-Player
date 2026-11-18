@@ -16,6 +16,8 @@
 2. 播放 Dolby Vision，按 `Ctrl+Alt+H` 查看 Windows 处理状态。在仅支持 SDR 的屏幕上，也可手动选择 **Advanced DV to SDR（独立动态映射）**。Windows 回退到普通 gpu-next 不会自动打开这个预设。
 3. 可选：将 `portable_config/script-opts/advanced_color_management.conf` 中的 `advanced_adaptive_highlights` 设为 `yes` 并重启。初始仍为 `no`。设备直出、系统 ICC 与专业 3D LUT 三选一，见[使用指南](advanced-dv-hdr-sdr.md)。
 
+每个安装目录默认用自己的 `portable_config/watch_later` 保存续播位置。旧播放器的全局续播记录不自动导入，以免恢复旧的视频滤镜。
+
 ## 这个预览版验证了什么
 
 - P8.4 的同帧软件 A/B 覆盖中亮、高占比白与暗场点光；P7 FEL 覆盖配对增强层下的局部彩色高光。截图和渲染缓冲对比验证 SDR 信号码值，不是屏幕实测亮度，也不等于厂商 Dolby 映射。

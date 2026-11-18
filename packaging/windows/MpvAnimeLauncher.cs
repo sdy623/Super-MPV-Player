@@ -62,7 +62,12 @@ internal static class MpvAnimeLauncher
         string retained = Path.Combine(Root, "original-backend");
         string engineRoot = File.Exists(Path.Combine(retained, "mpv.exe")) ? retained : Root;
         string native = Path.Combine(Root, "windows-dv-experimental");
-        List<string> playerArgs = new List<string> { "--config=yes", "--config-dir=" + Path.Combine(Root, "portable_config") };
+        string config = Path.Combine(Root, "portable_config");
+        // mpv looks in the per-user state directory even with --config-dir.
+        // Keep resume entries (including older file-local filters) inside this installation.
+        List<string> playerArgs = new List<string> {
+            "--config=yes", "--config-dir=" + config, "--watch-later-dir=" + Path.Combine(config, "watch_later")
+        };
         if (!originalBackend && File.Exists(Path.Combine(native, "mpv.exe")) &&
             File.Exists(Path.Combine(native, "windows-dv-frames.dll")) &&
             File.Exists(Path.Combine(native, "mpv_windows_dv_rpu.dll")))

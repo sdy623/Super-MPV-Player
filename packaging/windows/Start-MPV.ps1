@@ -5,7 +5,8 @@ $root=$PSScriptRoot
 $java=Join-Path $root 'runtime\java8'
 $data=Join-Path $root 'portable_config\bdj-data'
 New-Item -ItemType Directory -Force -Path (Join-Path $data 'cache'),(Join-Path $data 'persistent') | Out-Null
-$arguments=@('--idle=yes','--config=yes',('--config-dir='+(Join-Path $root 'portable_config')))
+$config=Join-Path $root 'portable_config'
+$arguments=@('--idle=yes','--config=yes',"--config-dir=$config",('--watch-later-dir='+(Join-Path $config 'watch_later')))
 $engineRoot=$root
 $retained=Join-Path $root 'original-backend'
 if(Test-Path -LiteralPath (Join-Path $retained 'mpv.exe')){$engineRoot=$retained}

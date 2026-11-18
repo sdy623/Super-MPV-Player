@@ -21,6 +21,8 @@ The NSIS `TESTMODE` switch writes shortcuts inside the test installation and avo
 
 Name the release assets `Super-MPV-Player-<version>-x64-Setup.exe`, `Super-MPV-Player-<version>-Source.zip`, and `Super-MPV-Player-<version>-Native-Sources.zip`. New installs default to `D:\Apps\Super-MPV-Player`. The prior install ID and registry key are retained to recognize upgrades; the installer does not remove shortcuts under the previous product name. The runtime filenames `mpv.exe`, `mpv.com`, and `MPV-Anime.exe` are unchanged.
 
+Both launchers store resume records in this installation's `portable_config/watch_later`. They leave any global mpv resume records in place. An explicit `--watch-later-dir` passed to the Windows launcher overrides the portable default.
+
 ## 2.1.0: patched libplacebo
 
 This branch now requires libplacebo 7.387.0 and the checked-in XYZ patch. The existing
