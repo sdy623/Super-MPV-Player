@@ -10,6 +10,12 @@
 #include <mfmediaengine.h>
 #include <mfreadwrite.h>
 #include <mftransform.h>
+#include <DispatcherQueue.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.ApplicationModel.AppService.h>
+#include <winrt/Windows.Graphics.Display.h>
+#include <winrt/Windows.System.h>
+#include <Windows.Graphics.Display.Interop.h>
 #include <mutex>
 #include <deque>
 #include <condition_variable>

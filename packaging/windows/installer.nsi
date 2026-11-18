@@ -6,7 +6,7 @@ Unicode true
 !define PAYLOAD "..\payload"
 !endif
 !ifndef OUTPUT
-!define OUTPUT "..\dist\MPV-Complete-2.1.1-x64-Setup.exe"
+!define OUTPUT "..\dist\MPV-Complete-2.2.0-x64-Setup.exe"
 !endif
 !define PRODUCT "MPV Complete"
 !define OWNER "MPVComplete-NSIS-v2"
@@ -24,10 +24,10 @@ ShowUninstDetails show
 BrandingText "MPV Complete - integrated media player"
 Icon "${PAYLOAD}\installer\mpv-icon.ico"
 UninstallIcon "${PAYLOAD}\installer\mpv-icon.ico"
-VIProductVersion "2.1.1.0"
+VIProductVersion "2.2.0.0"
 VIAddVersionKey "ProductName" "${PRODUCT}"
 VIAddVersionKey "FileDescription" "Per-user MPV installer with no-console launcher"
-VIAddVersionKey "FileVersion" "2.1.1.0"
+VIAddVersionKey "FileVersion" "2.2.0.0"
 VIAddVersionKey "LegalCopyright" "Third-party components retain their respective licenses"
 Var TestMode
 Var Links
@@ -131,14 +131,16 @@ Section "Player" SEC_PLAYER
         StrCpy $Links "$SMPROGRAMS\MPV Complete"
     ${EndIf}
     CreateDirectory "$Links"
+    Delete "$Links\MPV Advanced DV HDR SDR.lnk"
     CreateShortcut "$Links\MPV Complete.lnk" "$INSTDIR\MPV-Anime.exe" "" "$INSTDIR\MPV-Anime.exe" 0 SW_SHOWNORMAL
+    CreateShortcut "$Links\MPV Advanced DV to SDR.lnk" "$INSTDIR\MPV-Anime.exe" "--vo=gpu-next --target-colorspace-hint=yes --target-trc=auto --target-prim=auto --target-peak=auto --target-contrast=auto --hdr-reference-white=auto --icc-profile-auto=no --script-opts-append=native_dv_controls-auto_enable=no,advanced_color_management-start_mode=advanced-dv-to-sdr,advanced_color_management-advanced_reference=50e88c0" "$INSTDIR\MPV-Anime.exe" 0 SW_SHOWNORMAL
     CreateShortcut "$Links\蓝光原盘文件夹.lnk" "$INSTDIR\MPV-Anime.exe" "--open-bd-folder" "$INSTDIR\MPV-Anime.exe" 0 SW_SHOWNORMAL
     CreateShortcut "$Links\蓝光光驱播放.lnk" "$INSTDIR\MPV-Anime.exe" "--open-bd-drive" "$INSTDIR\MPV-Anime.exe" 0 SW_SHOWNORMAL
     CreateShortcut "$Links\MPV Original Backend.lnk" "$INSTDIR\MPV-Anime.exe" "--original-backend" "$INSTDIR\MPV-Anime.exe" 0 SW_SHOWNORMAL
     ${If} $TestMode != "1"
         CreateShortcut "$DESKTOP\MPV Complete.lnk" "$INSTDIR\MPV-Anime.exe" "" "$INSTDIR\MPV-Anime.exe" 0 SW_SHOWNORMAL
         WriteRegStr HKCU "${REGKEY}" "DisplayName" "${PRODUCT}"
-        WriteRegStr HKCU "${REGKEY}" "DisplayVersion" "2.1.1"
+        WriteRegStr HKCU "${REGKEY}" "DisplayVersion" "2.2.0"
         WriteRegStr HKCU "${REGKEY}" "InstallLocation" "$INSTDIR"
         WriteRegStr HKCU "${REGKEY}" "DisplayIcon" "$INSTDIR\MPV-Anime.exe"
         WriteRegStr HKCU "${REGKEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'
@@ -171,6 +173,8 @@ Section "Uninstall"
         ${EndIf}
     ${EndIf}
     Delete "$Links\MPV Complete.lnk"
+    Delete "$Links\MPV Advanced DV HDR SDR.lnk"
+    Delete "$Links\MPV Advanced DV to SDR.lnk"
     Delete "$Links\MPV Original Backend.lnk"
     Delete "$Links\蓝光原盘文件夹.lnk"
     Delete "$Links\蓝光光驱播放.lnk"

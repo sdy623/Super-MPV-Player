@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "DISPLAY\\BOE0CFB": {
+      "peak_nits": 400,
+      "source": "colorimeter+manufacturer"
+    }
+  }
+}

@@ -68,9 +68,9 @@ function subprocess(args, async, callback)
 
     if not pre_0_30_0 then
         if async then
-            return mp.command_native_async({name = "subprocess", playback_only = true, args = args, env = "PATH="..os.getenv("PATH")}, callback)
+            return mp.command_native_async({name = "subprocess", playback_only = true, args = args}, callback)
         else
-            return mp.command_native({name = "subprocess", playback_only = false, capture_stdout = true, args = args, env = "PATH="..os.getenv("PATH")})
+            return mp.command_native({name = "subprocess", playback_only = false, capture_stdout = true, args = args})
         end
     else
         if async then
@@ -260,7 +260,7 @@ end
 local unique = mp.utils.getpid()
 
 options.socket = options.socket .. unique
-options.thumbnail = options.thumbnail .. unique
+options.thumbnail = mp.command_native({"expand-path", options.thumbnail}) .. unique
 
 if options.direct_io then
     if os_name == "windows" then
@@ -274,7 +274,20 @@ end
 
 options.scale_factor = math.floor(options.scale_factor)
 
+local thumbnail_plan=dofile(assert(mp.find_config_file('script-modules/dv-thumbnail.lua')))
+local function preview_plan()
+ return thumbnail_plan(mp.get_property_native('video-params',{}),mp.get_property_native('track-list',{}),mp.get_property_native('vf-metadata/windows_dv',{}))
+end
 local mpv_path = options.mpv_path
+-- Use this exact candidate core, not whichever mpv happens to be on PATH.
+if mpv_path=='mpv' and os_name=='windows' then
+ local ok,ffi=pcall(require,'ffi')
+ if ok then
+  pcall(ffi.cdef,[[unsigned long __stdcall GetModuleFileNameW(void*, uint16_t*, unsigned long); int __stdcall WideCharToMultiByte(unsigned int,unsigned long,const uint16_t*,int,char*,int,void*,void*);]])
+  local k=ffi.load('kernel32');local w=ffi.new('uint16_t[32768]');local n=tonumber(k.GetModuleFileNameW(nil,w,32768));local b=ffi.new('char[131072]')
+  if n>0 and n<32768 then local m=k.WideCharToMultiByte(65001,0,w,n,b,131072,nil,nil);if m>0 then mpv_path=ffi.string(b,m)end end
+ end
+end
 local frontend_path
 
 if mpv_path == "mpv" and os_name == "windows" then
@@ -318,6 +331,10 @@ local function vo_tone_mapping()
 end
 
 local function vf_string(filters, full)
+    local plan=preview_plan()
+    if os_name=='windows' and plan.gpu then
+        return plan.preserve_rpu and '' or 'format=dolbyvision=no:enhancement-layer=no'
+    end
     local vf = ""
     local vf_table = properties["vf"]
     -- A thumbnail subprocess decodes the source, not the parent Windows-DV output.
@@ -480,6 +497,19 @@ local function spawn(time)
         "--ovc=rawvideo", "--of=image2", "--ofopts=update=1", "--o="..options.thumbnail
     }
 
+    local plan=preview_plan()
+    if os_name=='windows' and plan.gpu then
+        local keep={}
+        for _,v in ipairs(args)do
+            if not v:match('^%-%-ovc=') and not v:match('^%-%-of=') and not v:match('^%-%-ofopts=') and not v:match('^%-%-o=')then keep[#keep+1]=v end
+        end
+        args=keep
+        local worker=mp.find_config_file('script-modules/dv-thumb-worker.lua')
+        if not worker then mp.msg.error('Missing gpu-next thumbnail worker');return end
+        for _,v in ipairs({'--vo=gpu-next','--gpu-api=d3d11','--gpu-context=d3d11','--force-window=yes','--window-minimized=yes','--force-render=yes','--border=no','--osd-level=0','--target-prim=bt.709','--target-trc=srgb','--target-peak=auto','--icc-profile-auto=no','--tone-mapping=spline','--keepaspect-window=no','--geometry='..effective_w..'x'..effective_h,'--script='..worker,
+          '--script-opts=dvthumb-output='..options.thumbnail..',dvthumb-width='..effective_w..',dvthumb-height='..effective_h})do args[#args+1]=v end
+    end
+    mp.set_property_native('user-data/thumbnail-renderer',{profile=plan.profile or 0,transfer=plan.transfer or 'unknown',route=plan.gpu and 'gpu-next' or 'software',base_only=not plan.preserve_rpu,path=options.thumbnail})
     if not pre_0_30_0 then
         table.insert(args, "--sws-allow-zimg=no")
     end

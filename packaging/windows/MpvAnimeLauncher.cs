@@ -7,12 +7,12 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
-[assembly: System.Reflection.AssemblyVersion("2.1.1.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.1.1.0")]
+[assembly: System.Reflection.AssemblyVersion("2.2.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.2.0.0")]
 #if PRIVATE
-[assembly: System.Reflection.AssemblyInformationalVersion("2.1.1-private")]
+[assembly: System.Reflection.AssemblyInformationalVersion("2.2.0-private")]
 #else
-[assembly: System.Reflection.AssemblyInformationalVersion("2.1.1-open")]
+[assembly: System.Reflection.AssemblyInformationalVersion("2.2.0-open")]
 #endif
 [assembly: System.Reflection.AssemblyProduct("MPV Complete")]
 

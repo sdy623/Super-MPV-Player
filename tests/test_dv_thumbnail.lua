@@ -1,0 +1,6 @@
+local p=assert(loadfile(arg[1]))()
+assert(p({['gamma-original']='hlg'},{{selected=true,type='video',['dolby-vision-profile']=8}},{}).transfer=='hlg')
+assert(p({},{{selected=true,type='video',['dolby-vision-profile']=5}},{}).preserve_rpu==true)
+assert(p({['gamma-original']='pq'},{{selected=true,type='video',['dolby-vision-profile']=7}},{}).preserve_rpu==false)
+assert(not p({gamma='srgb'},{},{}).gpu)
+print('PASS thumbnail profile contract: P5 DV, P7/P8 compatible HDR, SDR untouched')

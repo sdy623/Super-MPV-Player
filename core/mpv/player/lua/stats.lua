@@ -848,7 +848,9 @@ local function append_hdr(s, hdr, video_out)
 
     if hdr["scene-max-r"] or hdr["scene-max-g"] or
        hdr["scene-max-b"] or hdr["scene-avg"] then
-        append(s, "", {prefix="HDR10+:"})
+        -- These are renderer scene statistics, also populated from DV RPU.
+        -- Their presence does not identify SMPTE ST 2094-40 / HDR10+.
+        append(s, "", {prefix="Scene luminance:"})
         append(s, format("%.1f / %.1f / %.1f", hdr["scene-max-r"] or 0,
                          hdr["scene-max-g"] or 0, hdr["scene-max-b"] or 0),
                {prefix="MaxRGB:", suffix=" cd/m²", nl="", indent=""})
@@ -990,6 +992,62 @@ local function add_video_out(s)
 end
 
 
+-- BEGIN DV STATUS
+-- Keep source metadata separate from the SDR frames returned by Windows.
+local function dv_status_rows(src)
+    local state=mp.get_property_native('user-data/windows-dv-inwindow',{})
+    local meta=mp.get_property_native('vf-metadata/windows_dv',{})
+    local track=mp.get_property_native('current-tracks/video',{})
+    local dst=mp.get_property_native('video-target-params',{})
+    local profile=tonumber(track['dolby-vision-profile'])
+    local level=tonumber(track['dolby-vision-level'])
+    local rpu=tonumber(state.rpu_seen) or 0
+    local dv=state.source_dv or rpu>0 or src.colormatrix=='dolbyvision' or (profile and profile>0)
+    local playback=mp.get_property_native('user-data/dv-playback',{})
+    local render=mp.get_property_native('video-out-params',{})
+    local base=state.source_base_transfer or meta['source-base-transfer']
+    if not base or base=='' or base=='other-or-unknown' then base=src['gamma-original'] end
+    if not base or base=='' or base=='other-or-unknown' then base=dv and 'unknown' or (src.gamma or 'unknown') end
+    local source
+    if dv then
+        source='Dolby Vision '..(profile and ('P'..profile) or '(profile unavailable)')
+        if profile==8 and base=='hlg' then source='Dolby Vision P8.4 (P8 / HLG)' end
+        if level then source=source..' / Level '..level end
+        source=source..' / base '..base:upper()..(state.paired_el and ' / paired EL' or '')
+    else source=(src.gamma=='pq' and 'HDR / PQ' or src.gamma=='hlg' and 'HDR / HLG' or 'SDR') end
+    local rows={{'Source HDR:',source}}
+    if dv then
+        rows[#rows+1]={'Transfer (base -> render):',base..' -> '..(render.gamma or 'unknown')}
+        if playback.dual_layer then
+            rows[#rows+1]={'Enhancement:',playback.rpu_disabled and 'RPU + EL disabled / BL-only' or
+                playback.el_disabled and 'EL disabled / BL + RPU' or 'EL enabled'}
+        end
+    end
+    if dv then
+        local seen=rpu>0 and (rpu..' frames seen') or (src.colormatrix=='dolbyvision' and 'frame metadata detected' or 'container flag only; awaiting frame metadata')
+        rows[#rows+1]={'RPU:',playback.rpu_disabled and (seen..' / disabled for BL-only comparison') or seen}
+    end
+    if meta.state=='fel-gpu-next' then
+        rows[#rows+1]={'DV Processing:','GPU FEL reconstruction / Windows BL-only effect not used'}
+    elseif state.windows_processed then
+        local gpu=meta['frame-transport']=='d3d11-gpu' and (tonumber(meta['gpu-frames']) or 0)>0
+        local transport=meta['output-contract']=='windows-sdr10-fp16-transport' and 'GPU Windows SDR10 / FP16 transport' or gpu and (state.float_output and ((state.relative_srgb_output or meta['output-contract']=='display-relative-srgb-fp16') and 'GPU FP16 relative sRGB' or 'GPU FP16 scRGB') or 'GPU shared textures') or 'CPU frame path'
+        local text='Windows Dolby active / '..transport..' / '..(tonumber(state.processed_frames) or 0)..' frames'
+        if tonumber(meta['last-render-ms']) then text=text..string.format(' / last batch %.2f ms',tonumber(meta['last-render-ms'])) end
+        rows[#rows+1]={'DV Processing:',text}
+    elseif dv then
+        rows[#rows+1]={'DV Processing:','Original gpu-next mapping / Windows '..(state.enabled and 'not confirmed' or 'off')}
+        if state.fallback_reason and state.fallback_reason~='' then rows[#rows+1]={'DV Fallback:',state.fallback_reason} end
+    end
+    if dv or src.gamma=='pq' or src.gamma=='hlg' then
+        local gamma=dst.gamma
+        local output=not gamma and 'unavailable' or ((gamma=='pq' or gamma=='hlg') and 'HDR / ' or 'SDR / ')..gamma
+        rows[#rows+1]={'HDR Output:',output..(state.windows_processed and ' (not physical DV HDR)' or '')}
+    end
+    return rows
+end
+-- END DV STATUS
+
 local function add_video(s)
     local r = mp.get_property_native("video-params")
     local ro = mp.get_property_native("video-out-params")
@@ -1057,6 +1115,9 @@ local function add_video(s)
     end
     append_img_params(s, r, ro)
     append_hdr(s, ro)
+    for _, row in ipairs(dv_status_rows(r)) do
+        append(s, row[2], {prefix=row[1]})
+    end
     append_property(s, "video-bitrate", {prefix="Bitrate:"})
     append_filters(s, "vf", "Filters:")
 end

@@ -1003,7 +1003,10 @@ local function dv_status_rows(src)
     local level=tonumber(track['dolby-vision-level'])
     local rpu=tonumber(state.rpu_seen) or 0
     local dv=state.source_dv or rpu>0 or src.colormatrix=='dolbyvision' or (profile and profile>0)
+    local playback=mp.get_property_native('user-data/dv-playback',{})
+    local render=mp.get_property_native('video-out-params',{})
     local base=state.source_base_transfer or meta['source-base-transfer']
+    if not base or base=='' or base=='other-or-unknown' then base=src['gamma-original'] end
     if not base or base=='' or base=='other-or-unknown' then base=dv and 'unknown' or (src.gamma or 'unknown') end
     local source
     if dv then
@@ -1014,14 +1017,23 @@ local function dv_status_rows(src)
     else source=(src.gamma=='pq' and 'HDR / PQ' or src.gamma=='hlg' and 'HDR / HLG' or 'SDR') end
     local rows={{'Source HDR:',source}}
     if dv then
+        rows[#rows+1]={'Transfer (base -> render):',base..' -> '..(render.gamma or 'unknown')}
+        if playback.dual_layer then
+            rows[#rows+1]={'Enhancement:',playback.rpu_disabled and 'RPU + EL disabled / BL-only' or
+                playback.el_disabled and 'EL disabled / BL + RPU' or 'EL enabled'}
+        end
+    end
+    if dv then
         local seen=rpu>0 and (rpu..' frames seen') or (src.colormatrix=='dolbyvision' and 'frame metadata detected' or 'container flag only; awaiting frame metadata')
-        rows[#rows+1]={'RPU:',seen}
+        rows[#rows+1]={'RPU:',playback.rpu_disabled and (seen..' / disabled for BL-only comparison') or seen}
     end
     if meta.state=='fel-gpu-next' then
         rows[#rows+1]={'DV Processing:','GPU FEL reconstruction / Windows BL-only effect not used'}
     elseif state.windows_processed then
         local gpu=meta['frame-transport']=='d3d11-gpu' and (tonumber(meta['gpu-frames']) or 0)>0
-        local transport=gpu and (state.float_output and 'GPU FP16 scRGB' or 'GPU shared textures') or 'CPU frame path'
+        local transport=meta['output-contract']=='windows-sdr10-rgb10-transport' and 'GPU Windows SDR10 / RGB10 direct transport' or
+            meta['output-contract']=='windows-sdr10-fp16-transport' and 'GPU Windows SDR10 / accepted FP16 code transport' or
+            gpu and (state.float_output and ((state.relative_srgb_output or meta['output-contract']=='display-relative-srgb-fp16') and 'GPU FP16 relative sRGB' or 'GPU FP16 scRGB') or 'GPU shared textures') or 'CPU frame path'
         local text='Windows Dolby active / '..transport..' / '..(tonumber(state.processed_frames) or 0)..' frames'
         if tonumber(meta['last-render-ms']) then text=text..string.format(' / last batch %.2f ms',tonumber(meta['last-render-ms'])) end
         rows[#rows+1]={'DV Processing:',text}

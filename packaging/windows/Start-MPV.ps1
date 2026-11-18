@@ -15,7 +15,8 @@ if(-not $OriginalBackend){
     if((Test-Path -LiteralPath (Join-Path $native 'mpv.exe')) -and (Test-Path -LiteralPath (Join-Path $native 'windows-dv-frames.dll'))){
         $engineRoot=$native
         $arguments+=@('--disc-menu=yes','--gpu-api=d3d11')
-        # native-controls.lua enables processing only after official dependency detection.
+        # native-controls.lua probes the official dependency; MFT processing is
+        # explicit unless native_dv_controls.conf opts into automatic DV mode.
     }else{Write-Warning 'Verified Windows-DV build missing; using the retained original MPV engine.'}
 }
 if($OpenBluRay){$arguments+=('--script-opts-append=bd_startup-action='+$OpenBluRay.ToLowerInvariant())}

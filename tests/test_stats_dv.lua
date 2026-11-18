@@ -6,8 +6,17 @@ local ok,err=pcall(function()
  local chunk=assert(loadstring(body..'\nreturn dv_status_rows'));setfenv(chunk,env);local rows=chunk()
  local function text()local t={};for _,x in ipairs(rows({colormatrix='dolbyvision'}))do t[#t+1]=x[2]end;return table.concat(t,'\n')end
  local s=text();assert(s:find('P8.4',1,true) and s:find('GPU shared',1,true) and s:find('120',1,true),s)
+ props['vf-metadata/windows_dv']={['frame-transport']='d3d11-gpu',['gpu-frames']='120',['output-contract']='windows-sdr10-fp16-transport'}
+ s=text();assert(s:find('accepted FP16 code transport',1,true),s)
  props['user-data/windows-dv-inwindow']={source_dv=true,windows_processed=false,enabled=true,state='fallback',fallback_reason='unsupported'};s=text();assert(s:find('unsupported',1,true));assert(not s:find('Windows Dolby active',1,true))
  props['current-tracks/video']={['dolby-vision-profile']=7};props['user-data/windows-dv-inwindow']={source_dv=true,windows_processed=true,paired_el=true,source_base_transfer='pq',processed_frames=5,rpu_seen=5};props['vf-metadata/windows_dv']={};s=text();assert(s:find('P7',1,true) and s:find('paired EL',1,true) and s:find('CPU',1,true));assert(not s:find('MEL',1,true),'No inferred MEL label')
+ props['current-tracks/video']={['dolby-vision-profile']=8};props['user-data/windows-dv-inwindow']={};props['video-out-params']={gamma='pq'}
+ local original=rows({colormatrix='dolbyvision',gamma='pq',['gamma-original']='hlg'})
+ local tx={};for _,x in ipairs(original)do tx[#tx+1]=x[2]end;tx=table.concat(tx,'\n')
+ assert(tx:find('P8.4',1,true) and tx:find('hlg -> pq',1,true),'original HLG and effective PQ must remain distinct')
+ props['user-data/dv-playback']={dual_layer=true,el_disabled=true};tx={};for _,x in ipairs(rows({colormatrix='dolbyvision'}))do tx[#tx+1]=x[2]end
+ assert(table.concat(tx,'\n'):find('EL disabled',1,true),'do not claim full FEL after EL off')
+ props['user-data/dv-playback']={}
  props['current-tracks/video']={};props['user-data/windows-dv-inwindow']={};local t=rows({gamma='pq'});assert(t[1][2]:find('PQ',1,true));assert(not t[1][2]:find('Dolby Vision',1,true))
 end)
 assert(ok,err)

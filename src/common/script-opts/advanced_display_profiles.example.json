@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "DISPLAY\\EXAMPLE": {
+      "peak_nits": 400,
+      "full_frame_nits": 270,
+      "black_nits": 0.2,
+      "source": "colorimeter",
+      "lut": "D:\\DisplayCAL\\example-device.cube"
+    }
+  }
+}

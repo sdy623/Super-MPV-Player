@@ -23,6 +23,15 @@ jobs:
       - run: luajit tests/test_native_controls.lua windows/native-dv/native-controls.lua
       - run: luajit tests/test_external_omniphony.lua src/common/scripts/omniphony.lua
       - run: luajit tests/test_windows_sdr_color.lua src/common/scripts/hdr-controls.lua
+      - run: luajit tests/test_relative_color.lua src/common/scripts/hdr-controls.lua
+      - run: luajit tests/test_relative_color_stability.lua src/common/scripts/hdr-controls.lua
+      - run: luajit tests/test_p5_icm.lua src/common/scripts/hdr-controls.lua
+      - run: luajit tests/test_advanced_color.lua src/common/scripts/hdr-controls.lua
+      - run: TEST_ADAPTIVE_OPT_IN=yes luajit tests/test_advanced_color.lua src/common/scripts/hdr-controls.lua
+      - run: cc -std=c11 -Wall -Wextra -Werror -Icore/mpv/video/out tests/test_adaptive_dv_sdr.c -lm -o /tmp/test-adaptive-dv-sdr && /tmp/test-adaptive-dv-sdr
+      - run: luajit tests/test_dv_playback.lua src/common/scripts/dv-playback.lua
+      - run: luajit tests/test_dv_thumbnail.lua src/common/script-modules/dv-thumbnail.lua
+      - run: luajit tests/test_stats_dv.lua src/common/scripts/stats.lua
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

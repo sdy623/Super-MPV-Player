@@ -1,10 +1,16 @@
 from pathlib import Path
-import json,shutil
+import argparse,json,re,shutil
+parser=argparse.ArgumentParser(description='Generate the Windows installer file lists.')
+parser.add_argument('--core-source-tree',required=True,help='Git tree ID of core/mpv used to build the payload')
+args=parser.parse_args()
+if not re.fullmatch('[0-9a-f]{40}',args.core_source_tree):
+ parser.error('--core-source-tree must be a full Git tree ID')
 R=Path(__file__).resolve().parent;P=R/'payload'
-(P/'portable_config/config-version').write_text('v2.1.1-open\n',encoding='utf8')
-(P/'安装与启动说明.txt').write_text('''MPV Complete 2.1.1 — 综合播放器正式版
+(P/'portable_config/config-version').write_text('v2.2.0-open\n',encoding='utf8')
+(P/'安装与启动说明.txt').write_text('''MPV Complete 2.2.0 — 综合播放器开放预览版
 
 使用英文安装路径（默认 D:\\Apps\\MPV-Complete）。本版本的蓝光 Java 运行时不支持中文安装路径，安装器会提前拒绝，原始媒体文件名不受此安装路径限制。
+Advanced Dolby Vision SDR Rendering (gpu-next) 的适用设备、可选亮度分配及 ICC/3D LUT 设置见 docs/advanced-dv-hdr-sdr.md。该模式输出 SDR，进阶亮度分配默认关闭。
 保留 Windows DV、Omniphony、BD-J 菜单及未加密 DCP CPL 画面/音轨配对。
 Windows DV 依赖用户从 Microsoft Store 或设备厂商合法安装的扩展；本包不含 Dolby 专有组件、激活材料或设备 ICC。当前 Windows 处理的色彩配置适配范围为单显示器；多屏或缺少系统配置时保留原映射。输出在 SDR 屏上仍是 SDR。
 视频与 Omniphony 音频分别选择，可同时启用。Omniphony 默认关闭；引擎和解码桥不随包附带，请从 HDR 与声音菜单的官方链接自行安装。保留 Studio 库优先。避免重复叠加耳机虚拟环绕。播放器启动不弹控制台，不自动安装专有组件，不自动关闭安全软件或添加排除。
@@ -18,7 +24,7 @@ assert not any(f.suffix.lower() in {'.icc','.icm'} for f in files)
 assert not any(f.name.lower()=='orender.dll' or (f.name.lower().startswith('harletty') and f.name.lower().endswith('_bridge.dll')) for f in files)
 assert not any(f.name.lower() == 'mpv-freemkv-bridge.exe' for f in files)
 assert not any(f.name.lower() in {'keydb.cfg','cookies.txt','recent.json','celebi.txt','skip-intro.json'} for f in files)
-(P/'package-manifest.json').write_text(json.dumps({'version':'2.1.1','core_source_commit':'49b2f5d','packaging_overlay':'2.1.1','files':[{'path':f.relative_to(P).as_posix(),'bytes':f.stat().st_size} for f in files]},indent=2),encoding='utf8');files.append(P/'package-manifest.json')
+(P/'package-manifest.json').write_text(json.dumps({'version':'2.2.0','core_source_tree':args.core_source_tree,'files':[{'path':f.relative_to(P).as_posix(),'bytes':f.stat().st_size} for f in files]},indent=2),encoding='utf8');files.append(P/'package-manifest.json')
 inst=[];uninst=[];dirs=set();current=None;overwrite=None
 def esc(s):return s.replace('$','$$')
 for f in files:

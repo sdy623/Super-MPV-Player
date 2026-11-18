@@ -25,10 +25,11 @@
 #include "video/mp_image_pool.h"
 #include "video/fmt-conversion.h"
 #include "wdv_frames.h"
+#include "fel_abi.h"
 
 #define BATCH 6
 #define READY_CAP (BATCH * 2)
-struct opts { char *dll; char *output_icc; bool gpu_float; };
+struct opts { char *dll; char *output_icc; bool gpu_float; bool fel_experiment; };
 typedef int (__cdecl *render_fn)(const wdv_frame_v2 *, uint32_t, uint32_t,
                                uint32_t, wdv_output_v2 *, char *, uint32_t);
 typedef void *(__cdecl *create_fn)(void);
@@ -38,8 +39,18 @@ typedef int (__cdecl *render3_fn)(void*,const wdv_frame_v2*,uint32_t,uint32_t,ui
 typedef void* (__cdecl *create_gpu6_fn)(void*,uint32_t,uint32_t,uint32_t,uint32_t);
 typedef void* (__cdecl *create_gpu_fn)(void*,uint32_t,uint32_t,uint32_t);
 typedef int (__cdecl *render_gpu_fn)(void*,const wdv_frame_v2*,const wdv_gpu_frame_v5*,uint32_t,uint32_t,uint32_t,wdv_output_v2*,char*,uint32_t);
+typedef int (__cdecl *render_fel_fn)(void*,const wdv_frame_v2*,const wdv_gpu_frame_v5*,const wdv_fel_frame_v10*,uint32_t,uint32_t,uint32_t,wdv_output_v2*,char*,uint32_t);
+typedef int (__cdecl *profile_fn)(const uint8_t*,size_t,int);
+typedef int (__cdecl *controls_fn)(void*,int,int);
 struct priv {
-    create_gpu6_fn create_gpu7, create_gpu6; bool job_float; unsigned gpu_transfer;
+    controls_fn controls;
+    bool el_off,rpu_off,job_el_off,job_rpu_off,applied_el_off,applied_rpu_off;
+    unsigned long long rpu_forwarded;
+    profile_fn classify;create_gpu6_fn create_profile,create_sdr12;unsigned source_profile;
+    bool job_native_sdr,gpu_native_sdr;
+
+    render_fel_fn render_fel;wdv_fel_frame_v10 fel[BATCH];bool job_reconstructed;
+    create_gpu6_fn create_gpu9, create_gpu7, create_gpu6; bool job_float, job_relative; unsigned gpu_transfer;
     create_gpu_fn create_gpu;render_gpu_fn render_gpu;void*gpu_session;
     AVBufferRef *gpu_pool;ID3D11Device *gpu_device;AVRational gpu_fps;unsigned gpu_chroma;
     wdv_gpu_frame_v5 gpu[BATCH];bool job_gpu;unsigned long long gpu_frames;
@@ -146,7 +157,11 @@ static DWORD WINAPI render_worker(LPVOID context)
 {
     struct mp_filter *f=context;struct priv *p=f->priv;
     LARGE_INTEGER a,b,hz;QueryPerformanceFrequency(&hz);QueryPerformanceCounter(&a);
-    if(p->job_gpu)p->rc=p->render_gpu(p->gpu_session,p->input,p->gpu,p->job_count,p->job_w,p->job_h,p->output,p->error,sizeof(p->error));
+    if(p->controls && p->job_gpu && p->controls(p->gpu_session,!p->job_el_off,!p->job_rpu_off)!=0){
+        p->rc=-1;snprintf(p->error,sizeof(p->error),"Windows comparison controls rejected");
+    }
+    else if(p->job_reconstructed)p->rc=p->render_fel(p->gpu_session,p->input,p->gpu,p->fel,p->job_count,p->job_w,p->job_h,p->output,p->error,sizeof(p->error));
+    else if(p->job_gpu)p->rc=p->render_gpu(p->gpu_session,p->input,p->gpu,p->job_count,p->job_w,p->job_h,p->output,p->error,sizeof(p->error));
     else p->rc=(p->job_hlg?p->hlg_session:p->session)?p->render3(p->job_hlg?p->hlg_session:p->session,p->input,p->job_count,p->job_w,p->job_h,p->output,p->error,sizeof(p->error)):p->render(p->input,p->job_count,p->job_w,p->job_h,p->output,p->error,sizeof(p->error));
     QueryPerformanceCounter(&b);p->render_ms=1000.0*(b.QuadPart-a.QuadPart)/hz.QuadPart;
     InterlockedExchange(&p->done,1);mp_filter_wakeup(f);return 0;
@@ -195,7 +210,7 @@ static void finish_batch(struct mp_filter *f)
             dst->params.color=pl_color_space_srgb;
             // FP16 carries extended linear RGB (1.0 = 80 nit), not panel RGB.
             // Keep negative/over-one values until gpu-next's gamut/tone mapping.
-            if(p->job_float)dst->params.color=(struct pl_color_space){
+            if(p->job_float && !p->job_relative)dst->params.color=(struct pl_color_space){
                 .primaries=PL_COLOR_PRIM_BT_709,.transfer=PL_COLOR_TRC_SCRGB};
             av_buffer_unref(&dst->icc_profile);
             if(p->output_icc && !p->job_float)dst->icc_profile=av_buffer_ref(p->output_icc);
@@ -205,7 +220,7 @@ static void finish_batch(struct mp_filter *f)
             dst->params.repr=(struct pl_color_repr){.sys=PL_COLOR_SYSTEM_RGB,
                 .levels=PL_COLOR_LEVELS_FULL,.alpha=PL_ALPHA_NONE};
             dst->params.primaries_orig=PL_COLOR_PRIM_BT_709;
-            dst->params.transfer_orig=p->job_float?PL_COLOR_TRC_SCRGB:PL_COLOR_TRC_SRGB; dst->params.sys_orig=PL_COLOR_SYSTEM_RGB;
+            dst->params.transfer_orig=p->job_float && !p->job_relative?PL_COLOR_TRC_SCRGB:PL_COLOR_TRC_SRGB; dst->params.sys_orig=PL_COLOR_SYSTEM_RGB;
             dst->params.no_dovi=true; dst->params.no_enhancement_layer=true;
             p->ready[kept+i]=dst; rgb[i]=NULL; talloc_free(orig);
         } else p->ready[kept+i]=orig;
@@ -213,9 +228,10 @@ static void finish_batch(struct mp_filter *f)
     }
     p->state=p->job_fel?"fel-gpu-next":ok?"processed":(has_rpu||p->failed?"fallback":"passthrough");
     if(p->job_fel){p->failed=false;p->last_error[0]=0;}
-    if(ok){if(p->job_gpu)p->gpu_frames+=p->count;p->processed_frames+=p->count;p->failed=false;p->last_error[0]=0;}
+    if(ok){p->applied_el_off=p->job_el_off;p->applied_rpu_off=p->job_rpu_off;if(!p->job_rpu_off)p->rpu_forwarded+=p->count;if(p->job_gpu)p->gpu_frames+=p->count;p->processed_frames+=p->count;p->failed=false;p->last_error[0]=0;}
     if (ok) MP_DBG(f,"Windows DV processed %d paired frames %.6f..%.6f in MPV; output %s.\n",
-                   p->count,p->ready[kept]->pts,p->ready[kept+p->count-1]->pts,p->job_float?"FP16 scRGB":"SDR BGRA");
+                   p->count,p->ready[kept]->pts,p->ready[kept+p->count-1]->pts,
+                   p->job_native_sdr?"native SDR RGB10":p->job_relative?"relative sRGB FP16":p->job_float?"FP16 scRGB":"SDR BGRA");
     p->ready_count=kept+p->count; p->ready_pos=0; p->count=0;
 }
 
@@ -228,24 +244,32 @@ static void begin_batch(struct mp_filter *f)
     snprintf(p->error,sizeof(p->error),"unsupported frame; original BL/EL retained");
     bool ok = p->render || p->session;
     int w = p->pending[0]->w, h = p->pending[0]->h;
-    bool has_rpu = false; p->job_fel=false;
+    p->job_el_off=p->el_off;p->job_rpu_off=p->rpu_off;
+    bool has_rpu = false; p->job_fel=false;p->job_reconstructed=false;memset(p->fel,0,sizeof(p->fel));
     struct mp_image *first=p->pending[0];
+    AVBufferRef *first_rpu=raw_rpu(first);
+    p->source_profile=p->classify&&first_rpu?p->classify(first_rpu->data,first_rpu->size,1):0;
+    bool p5=p->source_profile==5;
+    bool p8=p->source_profile==8 && !first->enhancement_layer;
     // v6 selects the actual BL transfer; v5 is HLG-only and must never receive PQ.
-    unsigned transfer=first->params.transfer_orig==PL_COLOR_TRC_HLG ? 2 :
+    unsigned transfer=p5 ? 3 : first->params.transfer_orig==PL_COLOR_TRC_HLG ? 2 :
                       first->params.transfer_orig==PL_COLOR_TRC_PQ ? 1 : 0;
     p->job_gpu=p->render_gpu && (p->create_gpu6 || (p->create_gpu && transfer==2)) &&
         first->imgfmt==IMGFMT_D3D11 && first->params.hw_subfmt==IMGFMT_P010 &&
         first->hwctx && transfer && first->nominal_fps>0;
-    // Float output is verified for HLG. Keep established PQ/P7 output unchanged.
-    p->job_float=p->job_gpu && transfer==2 && p->opts->gpu_float && p->create_gpu7;
+    // Native SDR10 uses FP16 transport without re-encoding. P7 remains legacy.
+    p->job_native_sdr=p->job_gpu && ((p5 && p->create_profile) || (p8 && p->create_sdr12));
+    p->job_float=p->job_gpu && ((p8 && p->create_sdr12) || (p5 && p->create_profile) || (transfer==2 && p->opts->gpu_float && (p->create_gpu9 || p->create_gpu7)));
+    p->job_relative=p->job_native_sdr || (p->job_float && (p5?p->create_profile!=NULL:p->create_gpu9!=NULL));
     if(p->job_gpu){
         AVHWFramesContext *fc=(void*)first->hwctx->data;
         AVHWDeviceContext *dc=(void*)fc->device_ref->data;
         AVD3D11VADeviceContext *dd=dc->hwctx;
         AVRational fps=av_d2q(first->nominal_fps,100000);unsigned chroma=first->params.chroma_location==PL_CHROMA_TOP_LEFT;
-        if(p->gpu_session && (p->gpu_device!=dd->device || av_cmp_q(fps,p->gpu_fps) || chroma!=p->gpu_chroma || transfer!=p->gpu_transfer)){p->destroy3(p->gpu_session);p->gpu_session=NULL;}
-        if(!p->gpu_session){p->gpu_device=dd->device;p->gpu_fps=fps;p->gpu_chroma=chroma;p->gpu_transfer=transfer;p->gpu_session=p->job_float ? p->create_gpu7(dd->device,fps.num,fps.den,chroma,transfer) : p->create_gpu6 ? p->create_gpu6(dd->device,fps.num,fps.den,chroma,transfer) : p->create_gpu(dd->device,fps.num,fps.den,chroma);}
-        ok=p->gpu_session && mp_update_av_hw_frames_pool(&p->gpu_pool,fc->device_ref,IMGFMT_D3D11,p->job_float?IMGFMT_RGBAF16:IMGFMT_BGRA,w,h,false);
+        if(p->gpu_session && (p->gpu_device!=dd->device || av_cmp_q(fps,p->gpu_fps) || chroma!=p->gpu_chroma || transfer!=p->gpu_transfer || p->job_native_sdr!=p->gpu_native_sdr)){p->destroy3(p->gpu_session);p->gpu_session=NULL;}
+        if(!p->gpu_session){p->gpu_device=dd->device;p->gpu_fps=fps;p->gpu_chroma=chroma;p->gpu_transfer=transfer;p->gpu_native_sdr=p->job_native_sdr;p->gpu_session=p8 && p->create_sdr12 ? p->create_sdr12(dd->device,fps.num,fps.den,chroma,transfer) : p5 ? (p->create_profile?p->create_profile(dd->device,fps.num,fps.den,chroma,5):NULL) : p->job_relative ? p->create_gpu9(dd->device,fps.num,fps.den,chroma,transfer) : p->job_float ? p->create_gpu7(dd->device,fps.num,fps.den,chroma,transfer) : p->create_gpu6 ? p->create_gpu6(dd->device,fps.num,fps.den,chroma,transfer) : p->create_gpu(dd->device,fps.num,fps.den,chroma);}
+        ok=p->gpu_session && mp_update_av_hw_frames_pool(&p->gpu_pool,fc->device_ref,
+            IMGFMT_D3D11,p->job_float?IMGFMT_RGBAF16:IMGFMT_BGRA,w,h,false);
         if(!ok)snprintf(p->error,sizeof(p->error),"GPU Windows DV session/pool unavailable");
     }
 
@@ -260,15 +284,23 @@ static void begin_batch(struct mp_filter *f)
         bool hlg=img->params.transfer_orig==PL_COLOR_TRC_HLG;
         if (i==0) p->job_hlg=hlg;
 #if PL_API_VER >= 370
-        // Windows accepts BL + RPU, not FEL residual textures. Preserve both
-        // layers for gpu-next's NLQ reconstruction instead of stripping FEL.
         if (img->params.repr.dovi && img->params.repr.dovi->nlq_active) {
-            p->job_fel=!!el;has_rpu=true;
-            snprintf(p->error,sizeof(p->error),"%s",el?"FEL reconstruction uses gpu-next; Windows BL-only effect cannot consume FEL residual":"FEL residual not paired; original frame retained");
-            ok=false;break;
-        }
+            if(!p->opts->fel_experiment || !p->render_fel || !p->job_gpu || !el ||
+               el->imgfmt!=IMGFMT_D3D11 || el->params.hw_subfmt!=IMGFMT_P010 || !el->hwctx) {
+                p->job_fel=!!el;has_rpu=true;
+                snprintf(p->error,sizeof(p->error),"FEL experiment unavailable: EL fmt=%d subfmt=%d; original BL/EL retained",el?el->imgfmt:0,el?el->params.hw_subfmt:0);
+                MP_WARN(f,"%s\n",p->error);ok=false;break;
+            }
+            p->job_reconstructed=true;
+            p->fel[i]=(wdv_fel_frame_v10){el->planes[0],(uintptr_t)el->planes[1],el->w,el->h,
+                &img->params.repr,&el->params.repr,img->params.chroma_location,el->params.chroma_location,PL_API_VER};
+        } else if(p->job_reconstructed) {ok=false;break;}
 #endif
-        if (rpu && p->job_gpu &&
+        if(p5 && (!p->job_gpu || el || img->params.repr.levels!=PL_COLOR_LEVELS_FULL ||
+            img->params.chroma_location!=PL_CHROMA_LEFT || !p->classify || p->classify(rpu?rpu->data:NULL,rpu?rpu->size:0,1)!=5)){
+            snprintf(p->error,sizeof(p->error),"P5 requires full-range raw P010, center-left chroma, original P5 RPU and no EL");ok=false;break;
+        }
+        if (rpu && !p5 && p->job_gpu &&
             (img->params.primaries_orig!=PL_COLOR_PRIM_BT_2020 ||
              img->params.sys_orig!=PL_COLOR_SYSTEM_BT_2020_NC ||
              img->params.repr.levels!=PL_COLOR_LEVELS_LIMITED ||
@@ -288,7 +320,7 @@ static void begin_batch(struct mp_filter *f)
             if(p->hlg_session && (av_cmp_q(fps,p->hlg_fps) || chroma!=p->hlg_chroma)) {p->destroy3(p->hlg_session);p->hlg_session=NULL;}
             if(!p->job_gpu && !p->hlg_session){p->hlg_fps=fps;p->hlg_chroma=chroma;p->hlg_session=p->create_hlg(fps.num,fps.den,chroma);}
             if(!p->job_gpu && !p->hlg_session){snprintf(p->error,sizeof(p->error),"HLG session creation failed");ok=false;break;}
-        } else if (rpu && img->params.transfer_orig!=PL_COLOR_TRC_PQ) {
+        } else if (rpu && !p5 && img->params.transfer_orig!=PL_COLOR_TRC_PQ) {
             snprintf(p->error,sizeof(p->error),"unsupported original BL transfer");ok=false;break;
         }
         if(hlg!=p->job_hlg){snprintf(p->error,sizeof(p->error),"mixed BL transfer batch");ok=false;break;}
@@ -387,7 +419,7 @@ static void reset(struct mp_filter *f)
 {
     struct priv *p=f->priv;
     p->seek_pts=MP_NOPTS_VALUE;p->seek_skipped=0;mp_image_unrefp(&p->seek_tail);
-    p->rpu_seen=p->processed_frames=p->gpu_frames=0;p->paired_el=false;p->state="waiting";p->last_error[0]=0;
+    p->rpu_seen=p->rpu_forwarded=p->processed_frames=p->gpu_frames=0;p->paired_el=false;p->state="waiting";p->last_error[0]=0;
     p->source_transfer=PL_COLOR_TRC_UNKNOWN;
     for(int i=0;i<READY_CAP;i++)mp_image_unrefp(&p->ready[i]);
     p->ready_count=p->ready_pos=0;
@@ -405,21 +437,43 @@ static bool command(struct mp_filter *f,struct mp_filter_command *cmd)
 {
     struct priv *p=f->priv;
     if(cmd->type==MP_FILTER_COMMAND_SET_SEEK_TARGET){p->seek_pts=cmd->seek_pts;return true;}
+    if(cmd->type==MP_FILTER_COMMAND_TEXT){
+        if(!p->controls || !p->job_gpu || !cmd->arg)return false;
+        bool off=!strcmp(cmd->arg,"no");
+        if(!off && strcmp(cmd->arg,"yes"))return false;
+        if(!strcmp(cmd->cmd,"el")){p->el_off=off;return true;}
+        if(!strcmp(cmd->cmd,"rpu")){
+            // P5 has no independently displayable HDR base layer. Never feed its
+            // IPT-PQ-C2 codes to a metadata-free BT.2020/YUV interpretation.
+            if(off && p->source_profile==5)return false;
+            p->rpu_off=off;return true;
+        }
+        return false;
+    }
     if(cmd->type!=MP_FILTER_COMMAND_GET_META)return false;
     struct mp_tags *t=talloc_zero(NULL,struct mp_tags);
+    mp_tags_set_str(t,"comparison-controls",p->controls && p->job_gpu?"yes":"no");
+    mp_tags_set_str(t,"el-requested",p->el_off?"off":"on");
+    mp_tags_set_str(t,"rpu-requested",p->rpu_off?"off":"on");
+    mp_tags_set_str(t,"el-contribution",p->applied_el_off?"off":"on");
+    mp_tags_set_str(t,"rpu-display-contribution",p->applied_rpu_off?"off":"on");
+    mp_tags_set_str(t,"rpu-forwarded",mp_tprintf(64,"%llu",p->rpu_forwarded));
+    mp_tags_set_str(t,"rpu-disable-supported",p->source_profile!=5 && p->controls && p->job_gpu?"yes":"no");
     mp_tags_set_str(t,"seek-preroll-skipped",mp_tprintf(64,"%llu",p->seek_skipped));
-    mp_tags_set_str(t,"output-icc",p->job_float?"none (scRGB)":p->profile_path?p->profile_path:"none");
+    mp_tags_set_str(t,"output-icc",p->job_relative?"none (Windows display-relative)":p->job_float?"none (scRGB)":p->profile_path?p->profile_path:"none");
     mp_tags_set_str(t,"state",p->state?p->state:"waiting");
     mp_tags_set_str(t,"rpu-seen",mp_tprintf(64,"%llu",p->rpu_seen));
     mp_tags_set_str(t,"processed-frames",mp_tprintf(64,"%llu",p->processed_frames));
     mp_tags_set_str(t,"paired-el",p->paired_el?"yes":"no");
-    mp_tags_set_str(t,"enhancement-path",p->job_fel?"gpu-next-fel":"unchanged");
+    mp_tags_set_str(t,"enhancement-path",p->job_reconstructed && !strcmp(p->state,"processed")?"gpu-reconstructed-fel-10bit-windows":p->job_fel?"gpu-next-fel":"unchanged");
     mp_tags_set_str(t,"bridge-available",p->render?"yes":"no");
     mp_tags_set_str(t,"fallback-reason",p->last_error);
-    mp_tags_set_str(t,"source-base-transfer",p->source_transfer == PL_COLOR_TRC_HLG ? "hlg" :
+    mp_tags_set_str(t,"source-profile",mp_tprintf(32,"%u",p->source_profile));
+    mp_tags_set_str(t,"source-base-transfer",p->source_profile==5 ? "ipt-pq-c2" :p->source_transfer == PL_COLOR_TRC_HLG ? "hlg" :
         p->source_transfer == PL_COLOR_TRC_PQ ? "pq" : "other-or-unknown");
-    mp_tags_set_str(t,"windows-input-transfer",p->job_hlg?"HLG":"PQ");
-    mp_tags_set_str(t,"output",p->job_float?"scRGB FP16 (display mapping follows)":"SDR");
+    mp_tags_set_str(t,"windows-input-transfer",p->source_profile==5?"P5 VUI unspecified":p->job_hlg?"HLG":"PQ");
+    mp_tags_set_str(t,"output",p->job_native_sdr?"Windows SDR10 -> FP16 transport":p->job_relative?"Windows relative-linear -> sRGB FP16":p->job_float?"scRGB FP16 (display mapping follows)":"SDR");
+    mp_tags_set_str(t,"output-contract",p->job_native_sdr?"windows-sdr10-fp16-transport":p->job_relative?"display-relative-srgb-fp16":p->job_float?"scrgb-fp16":"legacy-sdr");
     mp_tags_set_str(t,"frame-transport",p->job_gpu?"d3d11-gpu":"cpu-p010-bgra");
     mp_tags_set_str(t,"gpu-frames",mp_tprintf(64,"%llu",p->gpu_frames));
     mp_tags_set_str(t,"last-render-ms",mp_tprintf(64,"%.3f",p->render_ms));
@@ -442,6 +496,12 @@ static struct mp_filter *create(struct mp_filter *parent,void *options)
         if(p->dll)p->render=(render_fn)GetProcAddress(p->dll,"wdv_render_batch_v2");
     }
     if(p->dll){
+        p->controls=(controls_fn)GetProcAddress(p->dll,"wdv_set_comparison_v14");
+        p->render_fel=(render_fel_fn)GetProcAddress(p->dll,"wdv_render_gpu_fel_v10");
+        p->classify=(profile_fn)GetProcAddress(p->dll,"wdv_rpu_profile_v11");
+        p->create_sdr12=(create_gpu6_fn)GetProcAddress(p->dll,"wdv_create_gpu_sdr_v12");
+        p->create_profile=(create_gpu6_fn)GetProcAddress(p->dll,"wdv_create_gpu_profile_v11");
+        p->create_gpu9=(create_gpu6_fn)GetProcAddress(p->dll,"wdv_create_gpu_v9");
         p->create_gpu7=(create_gpu6_fn)GetProcAddress(p->dll,"wdv_create_gpu_v7");
         p->create_gpu6=(create_gpu6_fn)GetProcAddress(p->dll,"wdv_create_gpu_v6");
         p->create_gpu=(create_gpu_fn)GetProcAddress(p->dll,"wdv_create_gpu_v5");
@@ -459,6 +519,6 @@ static struct mp_filter *create(struct mp_filter *parent,void *options)
 #define OPT_BASE_STRUCT struct opts
 const struct mp_user_filter_entry vf_windows_dv={
     .desc={.name="windows-dv",.description="Experimental Windows Dolby processing in MPV window",
-        .priv_size=sizeof(struct opts),.options=(const m_option_t[]){{"dll",OPT_STRING(dll)},{"output-icc",OPT_STRING(output_icc)},{"gpu-float",OPT_BOOL(gpu_float)},{0}}},
+        .priv_size=sizeof(struct opts),.options=(const m_option_t[]){{"dll",OPT_STRING(dll)},{"output-icc",OPT_STRING(output_icc)},{"gpu-float",OPT_BOOL(gpu_float)},{"fel-experiment",OPT_BOOL(fel_experiment)},{0}}},
     .create=create,
 };

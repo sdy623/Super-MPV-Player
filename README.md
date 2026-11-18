@@ -2,9 +2,11 @@
 
 保留原主题、蓝光插件、章节与时间轴。Windows DV 视频处理和 Omniphony 对象音频分别选择，可同时使用。
 
-当前源码为 **2.1.1 字体修正版**，版本与新特性见[修正版说明](docs/release-2.1.1.md)。2.1.0 已因界面字体回归撤回，公开 Latest 暂为 [2.0.0](https://github.com/sdy623/mpv.config/releases/tag/v2.0.0-open)。官方 Dolby 组件由用户从 Microsoft Store／设备厂商安装。
+当前源码为 **Windows 2.2.0 开放预览版**。见[版本说明与已知限制](docs/release-2.2.0.md)，下载入口为 [GitHub Releases](https://github.com/sdy623/mpv.config/releases)。开放 gpu-next 路径无需官方 Dolby 组件；可选的 Windows Dolby 路径需通过 Microsoft Store 或设备厂商安装兼容组件。
 
 [开放版状态与依赖说明](docs/open-edition.md)
+
+[Advanced Dolby Vision SDR Rendering (gpu-next)](docs/advanced-dv-hdr-sdr.md) 面向 Windows 识别为仅支持 SDR 的屏幕。开放路径用可用的 Dolby Vision 元数据做亮度与色域映射，最终输出 SDR，无需 Windows Dolby 扩展。可选的自适应高光根据屏幕余量和画面亮度分布分配亮度：有细节的高光可以更亮，大面积白和暗场小高光不一味推亮。指南说明适用屏幕、同屏对照、ICC 与专业 3D LUT 工作流。
 
 Omniphony 为用户自行安装的可选组件：[引擎 / Studio 官方下载](https://github.com/mgth/Omniphony/releases/tag/v0.7.0) · [解码桥官方下载](https://github.com/harletty/harletty-bridge/releases/tag/v0.9.0)。保留 Studio 库优先；依赖不齐时继续原音频解码。
 

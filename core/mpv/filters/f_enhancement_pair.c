@@ -170,6 +170,27 @@ static void pair_process(struct mp_filter *f)
         if (!give_up)
             return;
 
+        // For FEL, emitting this frame without the non-trivial NLQ residual is
+        // a silent image downgrade. This occurs at decoder catch-up after some
+        // seeks: the next EL PTS proves the current residual cannot arrive.
+        // Drop only that unreconstructable FEL BL. MEL, invalid streams at EL
+        // EOF, and an explicit enhancement-layer=no comparison retain the BL
+        // fallback contract.
+        const struct pl_dovi_metadata *next_dovi = p->num_el_pending > 0
+            ? p->el_pending[0]->params.repr.dovi : NULL;
+        bool bl_requires_fel = !bl->params.no_enhancement_layer &&
+            ((bl->params.repr.dovi && bl->params.repr.dovi->nlq_active) ||
+             (next_dovi && next_dovi->nlq_active));
+        if (!p->el_eof && p->num_el_pending > 0 && cmp > 0 &&
+            bl_requires_fel)
+        {
+            MP_VERBOSE(f, "dropping unreconstructable FEL BL %.6f "
+                          "(next EL %.6f)\n",
+                       bl->pts, p->el_pending[0]->pts);
+            pop_head(&p->bl_pending, &p->num_bl_pending);
+            continue;
+        }
+
         MP_VERBOSE(f, "emitting BL %.6f alone (%s; bl_pending=%d el_pending=%d"
                    " el head %.6f)\n", bl->pts,
                    p->el_eof ? "el_eof" :

@@ -2,6 +2,10 @@
 
 # Ready-to-Use Configuration Files, Elegant UI Themes & Useful Plugins for mpv and mpv.net (Windows, macOS, Linux)
 
+**Windows open edition 2.2.0 pre-release:** [release notes and known limits](docs/release-2.2.0.md) · [GitHub Releases](https://github.com/sdy623/mpv.config/releases).
+
+**[Advanced Dolby Vision SDR Rendering (gpu-next)](docs/advanced-dv-hdr-sdr.md)** maps Dolby Vision video to Windows SDR-only displays using the open FFmpeg → mpv gpu-next → libplacebo path. The optional highlight refinement uses display headroom and scene brightness together, protecting large white fields and dark scenes from blanket brightening. The guide explains display eligibility, same-display A/B checks, ICC and expert 3D LUT calibration.
+
 > The configuration file of the mpv player supports Windows, macOS, Linux, with a consistent context menu feature across all platforms.
 
 #### [中文](https://github.com/akFace/mpv.config/blob/master/README.md) | English

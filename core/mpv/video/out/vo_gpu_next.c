@@ -19,11 +19,13 @@
 
 #include <sys/stat.h>
 #include <time.h>
+#include <libavutil/dovi_meta.h>
 
 #include <libplacebo/colorspace.h>
 #include <libplacebo/options.h>
 #include <libplacebo/renderer.h>
 #include <libplacebo/shaders/lut.h>
+#include <libplacebo/shaders/sampling.h>
 #include <libplacebo/shaders/icc.h>
 #include <libplacebo/utils/libav.h>
 #include <libplacebo/utils/frame_queue.h>
@@ -115,6 +117,9 @@ struct hwdec_slot {
     pl_tex tex[4];            // plane textures of the current mapping
 };
 
+#include "adaptive_dv_sdr.h"
+#include <libplacebo/shaders/custom.h>
+
 struct priv {
     struct mp_log *log;
     struct mpv_global *global;
@@ -138,6 +143,28 @@ struct priv {
     pl_queue queue;
     pl_swapchain sw;
     pl_fmt osd_fmt[SUBBITMAP_COUNT];
+    pl_tex dovi_mask_tex;
+    pl_tex dovi_sdr_tex;
+    pl_tex dovi_sdr_probe_tex;
+    pl_renderer rr_sdr_cal;
+    bool dovi_sdr_dump_done;
+    bool dovi_sdr_logged;
+    bool dovi_sdr_probe_logged;
+    bool dovi_sdr_probe_valid;
+    double dovi_sdr_probe_pts;
+    float dovi_sdr_probe_avg_pq_y;
+    float dovi_sdr_probe_avg_y;
+    float dovi_sdr_probe_avg_max;
+    float dovi_sdr_probe_ratio;
+    float dovi_sdr_probe_source_max_nits;
+    float dovi_sdr_probe_fel_peak;
+    bool dovi_sdr_probe_fel;
+    float dovi_sdr_signal_peak;
+    struct dvsdr_scene adaptive_scene;
+    struct dvsdr_gain adaptive_gain;
+    float adaptive_peak, adaptive_black, adaptive_anchor;
+    bool adaptive_direct, adaptive_context_valid;
+    bool display_rgb_done;
     pl_tex *sub_tex;
     int num_sub_tex;
 
@@ -184,6 +211,15 @@ static void update_lut(struct priv *p, struct user_lut *lut);
 
 struct gl_next_opts {
     bool delayed_peak;
+    bool dovi_display;
+    bool dovi_sdr_staged;
+    bool dovi_sdr_adaptive;
+    bool dovi_l1_only;
+    float dovi_sdr_display_peak;
+    float dovi_sdr_display_black;
+    float dovi_sdr_signal_anchor;
+    char *dovi_sdr_dump;
+    char *display_rgb_dump;
     int sub_hdr_peak;
     int image_subs_hdr_peak;
     int border_background;
@@ -215,6 +251,18 @@ const struct m_sub_options gl_next_conf = {
         {"image-subs-hdr-peak", OPT_CHOICE(image_subs_hdr_peak, {"sdr", PL_COLOR_SDR_WHITE},
             {"video", -1}, {"video-static", -2}, {"video-dynamic", -3}),  M_RANGE(10, 10000)},
         {"allow-delayed-peak-detect", OPT_BOOL(delayed_peak)},
+        {"gpu-next-dovi-display", OPT_BOOL(dovi_display)},
+        {"gpu-next-display-rgb-dump", OPT_STRING(display_rgb_dump), .flags=M_OPT_FILE},
+        {"gpu-next-dovi-sdr-staged", OPT_BOOL(dovi_sdr_staged)},
+        {"gpu-next-dovi-sdr-adaptive", OPT_BOOL(dovi_sdr_adaptive)},
+        {"gpu-next-dovi-l1-only", OPT_BOOL(dovi_l1_only)},
+        {"gpu-next-dovi-sdr-display-peak", OPT_FLOAT(dovi_sdr_display_peak),
+            M_RANGE(0, 10000)},
+        {"gpu-next-dovi-sdr-display-black", OPT_FLOAT(dovi_sdr_display_black),
+            M_RANGE(0, 100)},
+        {"gpu-next-dovi-sdr-signal-anchor", OPT_FLOAT(dovi_sdr_signal_anchor),
+            M_RANGE(0, 10000)},
+        {"gpu-next-dovi-sdr-dump", OPT_STRING(dovi_sdr_dump), .flags=M_OPT_FILE},
         {"border-background", OPT_CHOICE(border_background,
             {"none",  BACKGROUND_NONE},
             {"color", BACKGROUND_COLOR},
@@ -236,6 +284,7 @@ const struct m_sub_options gl_next_conf = {
         {0},
     },
     .defaults = &(struct gl_next_opts) {
+        .dovi_display = true,
         .border_background = BACKGROUND_COLOR,
         .background_blur_radius = 16.0f,
         .inter_preserve = true,
@@ -564,7 +613,135 @@ struct frame_priv {
     struct ra_hwdec *el_hwdec;
     pl_tex el_tex[4];
     struct pl_frame el_frame;
+    bool has_dovi;
+    bool hlg_authored_l1;
+    struct pl_hdr_metadata dovi_hdr;
+    struct pl_overlay dovi_mask;
+    struct pl_overlay_part dovi_mask_parts[4];
+    struct pl_overlay *dovi_overlays;
+
 };
+
+
+// Display management is separate from mandatory reshape/matrix/NLQ decoding.
+// The open renderer consumes L1 brightness metadata and L5 active-area blanking;
+// this is not an implementation of Dolby's proprietary trim/display engine.
+static const AVDOVIMetadata *frame_dovi_metadata(const struct mp_image *mpi)
+{
+    for (int n = 0; n < mpi->num_ff_side_data; n++) {
+        if (mpi->ff_side_data[n].type == AV_FRAME_DATA_DOVI_METADATA)
+            return (const void *) mpi->ff_side_data[n].buf->data;
+    }
+    return NULL;
+}
+
+static void init_dovi_display(struct priv *p, struct mp_image *mpi,
+                              struct pl_frame *frame)
+{
+    struct frame_priv *fp = mpi->priv;
+    if (frame->repr.sys != PL_COLOR_SYSTEM_DOLBYVISION || !frame->repr.dovi)
+        return;
+    fp->has_dovi = true;
+    fp->dovi_hdr = frame->color.hdr;
+    const AVDOVIMetadata *md = frame_dovi_metadata(mpi);
+    if (!md && mpi->enhancement_layer)
+        md = frame_dovi_metadata(mpi->enhancement_layer);
+    // Keep P5/P7 and Windows-processed RGB on their existing paths. For
+    // single-layer HLG DV, valid authored L1 is the SDR adaptation source.
+    const AVDOVIDmData *l1 = md ? av_dovi_find_level(md, 1) : NULL;
+    fp->hlg_authored_l1 = mpi->params.transfer_orig == PL_COLOR_TRC_HLG &&
+        !mpi->enhancement_layer && l1 && l1->l1.avg_pq > 0 &&
+        l1->l1.min_pq <= l1->l1.avg_pq &&
+        l1->l1.avg_pq <= l1->l1.max_pq && l1->l1.max_pq <= 4095 &&
+        fp->dovi_hdr.avg_pq_y > 0 && fp->dovi_hdr.max_pq_y > 0;
+    const AVDOVIDmData *l5 = md ? av_dovi_find_level(md, 5) : NULL;
+    if (!l5)
+        return;
+    const int w = mpi->params.w, h = mpi->params.h;
+    const int left = l5->l5.left_offset, right = l5->l5.right_offset;
+    const int top = l5->l5.top_offset, bottom = l5->l5.bottom_offset;
+    // Invalid metadata must not erase or enlarge the image.
+    if (left + right >= w || top + bottom >= h || !(left|right|top|bottom))
+        return;
+    if (!p->dovi_mask_tex) {
+        const uint8_t white = 255;
+        pl_fmt fmt = pl_find_fmt(p->gpu, PL_FMT_UNORM, 1, 8, 8,
+                                PL_FMT_CAP_SAMPLEABLE);
+        if (!fmt)
+            return;
+        p->dovi_mask_tex = pl_tex_create(p->gpu, pl_tex_params(
+            .w = 1, .h = 1, .format = fmt, .sampleable = true,
+            .initial_data = &white));
+    }
+    if (!p->dovi_mask_tex)
+        return;
+    pl_rect2df regions[] = {{0,0,w,top}, {0,h-bottom,w,h},
+                            {0,top,left,h-bottom}, {w-right,top,w,h-bottom}};
+    int count = 0;
+    for (int i = 0; i < 4; i++) {
+        if (pl_rect_w(regions[i]) <= 0 || pl_rect_h(regions[i]) <= 0)
+            continue;
+        fp->dovi_mask_parts[count++] = (struct pl_overlay_part) {
+            .src = {0,0,1,1}, .dst = regions[i], .color = {0,0,0,1},
+        };
+    }
+    fp->dovi_mask = (struct pl_overlay) {
+        .tex = p->dovi_mask_tex, .mode = PL_OVERLAY_MONOCHROME,
+        .coords = PL_OVERLAY_COORDS_SRC_FRAME,
+        .repr = pl_color_repr_rgb, .color = pl_color_space_srgb,
+        .parts = fp->dovi_mask_parts, .num_parts = count,
+    };
+    MP_DBG(p, "DV L5 active area: L%d R%d T%d B%d, canvas %dx%d\n",
+           left, right, top, bottom, w, h);
+}
+
+// Share the SDR adaptation decision with both presentation and screenshots.
+static bool use_authored_dovi_l1(struct priv *p, const struct pl_frame_mix *mix,
+                                  const struct pl_frame *target)
+{
+    const struct gl_video_opts *opts = p->opts_cache->opts;
+    // libplacebo preserves authored L1 and uses measurement to fill missing
+    // scene fields (including maxRGB). Never turn auto into L1-only implicitly.
+    // Keep the old L1-only experiment explicit and subordinate to yes/no.
+    if (!p->next_opts->dovi_l1_only ||
+        opts->tone_map.compute_peak != 0 || !p->next_opts->dovi_display ||
+        !mix->num_frames || pl_color_space_is_hdr(&target->color))
+        return false;
+    for (int i = 0; i < mix->num_frames; i++) {
+        const struct mp_image *mpi = mix->frames[i]->user_data;
+        const struct frame_priv *fp = mpi ? mpi->priv : NULL;
+        if (!fp || !fp->has_dovi || !fp->hlg_authored_l1)
+            return false;
+    }
+    return true;
+}
+
+static void apply_dovi_display(struct priv *p, struct pl_frame *frame)
+{
+    struct mp_image *mpi = frame->user_data;
+    struct frame_priv *fp = mpi->priv;
+    if (!fp->has_dovi)
+        return; // In particular, Windows-processed RGB is untouched.
+    frame->color.hdr = fp->dovi_hdr;
+    if (!p->next_opts->dovi_display) {
+        frame->color.hdr.max_pq_y = 0;
+        frame->color.hdr.avg_pq_y = 0;
+    }
+    // Always rebuild from the original subtitle list, not last draw's masks.
+    // Keep the canvas/scale unchanged. Blanking precedes subtitles/OSD.
+    const struct gl_video_opts *opts = p->opts_cache->opts;
+    const int subs = opts->blend_subs ? fp->subs.num_overlays : 0;
+    const bool mask = p->next_opts->dovi_display && fp->dovi_mask.num_parts;
+    fp->dovi_overlays = talloc_realloc(mpi, fp->dovi_overlays,
+                                     struct pl_overlay, subs + (mask ? 1 : 0));
+    int n = 0;
+    if (mask)
+        fp->dovi_overlays[n++] = fp->dovi_mask;
+    for (int i = 0; i < subs; i++)
+        fp->dovi_overlays[n++] = fp->subs.overlays[i];
+    frame->overlays = fp->dovi_overlays;
+    frame->num_overlays = n;
+}
 
 static int plane_data_from_imgfmt(struct pl_plane_data out_data[4],
                                   struct pl_bit_encoding *out_bits,
@@ -1096,6 +1273,8 @@ static bool map_frame(pl_gpu gpu, pl_tex *tex, const struct pl_source_frame *src
     if (mpi->film_grain)
         pl_film_grain_from_av(&frame->film_grain, (AVFilmGrainParams *) mpi->film_grain->data);
 
+    init_dovi_display(p, mpi, frame);
+
     // Compute a unique signature for any attached ICC profile. Wasteful in
     // theory if the ICC profile is the same for multiple frames, but in
     // practice ICC profiles are overwhelmingly going to be attached to
@@ -1268,6 +1447,638 @@ static void apply_target_options(struct priv *p, struct pl_frame *target,
     target->icc = p->icc_profile;
 }
 
+
+// SDR display management and device calibration are independent operations.
+// Inspired by CB1's independent SDR target contract; uses the existing mpv
+// decoder, RPU/FEL reconstruction and stock libplacebo API, not a CB1 ABI.
+// The SDR signal remains floating point until final presentation.
+static bool staged_sdr_eligible(struct priv *p, const struct pl_frame_mix *mix,
+                                const struct pl_frame *target)
+{
+    if (!p->next_opts->dovi_sdr_staged || !mix->num_frames ||
+        pl_color_transfer_is_hdr(target->color.transfer))
+        return false;
+    for (int i = 0; i < mix->num_frames; i++) {
+        const struct mp_image *mpi = mix->frames[i]->user_data;
+        const struct frame_priv *fp = mpi ? mpi->priv : NULL;
+        if (!fp || !fp->has_dovi || mpi->enhancement_layer ||
+            mpi->params.transfer_orig != PL_COLOR_TRC_HLG ||
+            mix->frames[i]->repr.sys != PL_COLOR_SYSTEM_DOLBYVISION)
+            return false;
+    }
+    return true;
+}
+
+static void dump_sdr_boundary(struct priv *p, const struct pl_frame *sdr)
+{
+    const char *path = p->next_opts->dovi_sdr_dump;
+    if (!path || p->dovi_sdr_dump_done)
+        return;
+    p->dovi_sdr_dump_done = true;
+    pl_tex tex = sdr->planes[0].texture;
+    const int w = tex->params.w, h = tex->params.h;
+    float *rgb = talloc_array(NULL, float, (size_t)w*h*4);
+    bool ok = pl_tex_download(p->gpu, pl_tex_transfer_params(.tex=tex,.ptr=rgb));
+    FILE *f = ok ? fopen(path, "wb") : NULL;
+    if (f) {
+        ok = fwrite(rgb, sizeof(float), (size_t)w*h*4, f) == (size_t)w*h*4;
+        fclose(f);
+    } else {
+        ok = false;
+    }
+    char *sidecar = talloc_asprintf(NULL, "%s.json", path);
+    f = fopen(sidecar, "w");
+    if (f) {
+        fprintf(f, "{\"ok\":%s,\"stage\":\"SDR-before-device-calibration\","
+                "\"width\":%d,\"height\":%d,\"format\":\"rgba32f-le\","
+                "\"primaries\":%d,\"transfer\":%d,\"max_luma\":%.9g,"
+                "\"min_luma\":%.9g,\"rpu_display\":%s,"
+                "\"icc_in_mapping\":false}\n",
+                ok ? "true":"false",w,h,sdr->color.primaries,sdr->color.transfer,
+                sdr->color.hdr.max_luma,sdr->color.hdr.min_luma,
+                p->next_opts->dovi_display ? "true":"false");
+        fclose(f);
+    }
+    MP_INFO(p, "SDR boundary dump %s: %s\n", ok ? "saved":"FAILED", path);
+    talloc_free(sidecar);
+    talloc_free(rgb);
+}
+
+static float sdr_signal_smoothstep(float lo, float hi, float value)
+{
+    float t = MPCLAMP((value - lo) / (hi - lo), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// A Profile 7 label or an EL track is not enough to establish FEL output. The
+// renderer must have both the PTS-paired EL image and non-trivial NLQ residual
+// metadata on every frame taking part in the current mix.
+static bool mix_has_fel_residual(const struct pl_frame_mix *mix)
+{
+    if (!mix->num_frames)
+        return false;
+    for (int i = 0; i < mix->num_frames; i++) {
+        const struct pl_frame *frame = mix->frames[i];
+        if (!frame->enhancement_layer || !frame->repr.dovi ||
+            !frame->repr.dovi->nlq_active)
+            return false;
+    }
+    return true;
+}
+
+static float mix_source_max_pq_y_nits(const struct pl_frame_mix *mix)
+{
+    float max_pq_y = 0.0f;
+    for (int i = 0; i < mix->num_frames; i++) {
+        const float value = mix->frames[i]->color.hdr.max_pq_y;
+        if (value > max_pq_y && value <= 1.0f && isfinite(value))
+            max_pq_y = value;
+    }
+    return max_pq_y > 0.0f
+        ? pl_hdr_rescale(PL_HDR_PQ, PL_HDR_NITS, max_pq_y) : 0.0f;
+}
+
+// Preserve the accepted APL-based envelope for ordinary DV. A reconstructed
+// FEL can carry a small highlight residual that barely changes a 32x18 average,
+// so use authored RPU L1 maxY to reserve panel headroom for that image signal.
+// This remains continuous for sub-peak masters and reaches the measured panel
+// ceiling only when the authored tail reaches that capability.
+static float p7_fel_signal_floor(float signal_anchor, float display_peak,
+                                 float source_max_nits)
+{
+    if (!(display_peak > signal_anchor) || !(source_max_nits > signal_anchor))
+        return signal_anchor;
+    const float tail = sdr_signal_smoothstep(signal_anchor, display_peak,
+                                              source_max_nits);
+    return signal_anchor + (display_peak - signal_anchor) * tail;
+}
+
+static float srgb_to_linear(float value)
+{
+    value = MPCLAMP(value, 0.0f, 1.0f);
+    return value <= 0.04045f ? value / 12.92f
+                            : powf((value + 0.055f) / 1.055f, 2.4f);
+}
+
+enum { DOVI_PROBE_W = 32, DOVI_PROBE_H = 18 };
+
+static bool prepare_sdr_probe(struct priv *p)
+{
+    pl_fmt fmt = pl_find_fmt(p->gpu, PL_FMT_FLOAT, 4, 32, 32,
+                             PL_FMT_CAP_RENDERABLE | PL_FMT_CAP_SAMPLEABLE);
+    return fmt && pl_tex_recreate(p->gpu, &p->dovi_sdr_probe_tex, pl_tex_params(
+        .w=DOVI_PROBE_W, .h=DOVI_PROBE_H, .format=fmt, .renderable=true,
+        .host_readable=true));
+}
+
+static bool read_sdr_probe(struct priv *p, float *avg_y, float *avg_max,
+                           float *ratio)
+{
+    float pixels[DOVI_PROBE_W * DOVI_PROBE_H * 4];
+    if (!pl_tex_download(p->gpu, pl_tex_transfer_params(
+            .tex=p->dovi_sdr_probe_tex, .ptr=pixels)))
+        return false;
+
+    double sum_y = 0.0, sum_max = 0.0, shoulder = 0.0, near_white = 0.0;
+    const bool adaptive = p->next_opts->dovi_sdr_adaptive;
+    for (int i = 0; i < DOVI_PROBE_W * DOVI_PROBE_H; i++) {
+        const float r = srgb_to_linear(pixels[4 * i + 0]);
+        const float g = srgb_to_linear(pixels[4 * i + 1]);
+        const float b = srgb_to_linear(pixels[4 * i + 2]);
+        const float y = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+        const float m = MPMAX(r, MPMAX(g, b));
+        // Preserve the original double-precision accumulation (opt-out too).
+        sum_y += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        sum_max += m;
+        if (adaptive) {
+            // maxRGB includes saturated FEL highlights; white coverage uses Y.
+            shoulder += dvsdr_smooth(.23f,.50f,m) * (1-dvsdr_smooth(.70f,.94f,m));
+            near_white += dvsdr_smooth(.47f,.78f,y);
+        }
+    }
+    *avg_y = sum_y / (DOVI_PROBE_W * DOVI_PROBE_H);
+    *avg_max = sum_max / (DOVI_PROBE_W * DOVI_PROBE_H);
+    *ratio = *avg_max > 1e-6f ? *avg_y / *avg_max : 1.0f;
+    if (adaptive) {
+        p->adaptive_scene = (struct dvsdr_scene){*avg_y,
+            shoulder/(DOVI_PROBE_W*DOVI_PROBE_H),
+            near_white/(DOVI_PROBE_W*DOVI_PROBE_H)};
+    }
+    return isfinite(*avg_y) && isfinite(*avg_max) && isfinite(*ratio);
+}
+
+// Measure a deliberately tiny grid after the authored DV/libplacebo mapping.
+// The synchronous readback is therefore bounded to 9 KiB and throttled below;
+// it never downloads the source or full-size FP32 intermediate during playback.
+static bool measure_sdr_signal(struct priv *p, float *avg_y, float *avg_max,
+                               float *ratio)
+{
+    if (!prepare_sdr_probe(p))
+        return false;
+
+    pl_dispatch dp = pl_dispatch_create(p->pllog, p->gpu);
+    bool ok = !!dp;
+    if (ok) {
+        pl_shader sh = pl_dispatch_begin(dp);
+        ok = pl_shader_sample_nearest(sh, pl_sample_src(
+            .tex=p->dovi_sdr_tex, .new_w=DOVI_PROBE_W, .new_h=DOVI_PROBE_H,
+            .components=4));
+        if (ok)
+            ok = pl_dispatch_finish(dp, pl_dispatch_params(
+                .shader=&sh, .target=p->dovi_sdr_probe_tex));
+        else
+            pl_dispatch_abort(dp, &sh);
+    }
+    pl_dispatch_destroy(&dp);
+    return ok && read_sdr_probe(p, avg_y, avg_max, ratio);
+}
+
+// Profiles that do not need the full-size P8.4 FP32 boundary still receive the
+// same dynamic display strategy. Render only a 32x18 off-screen probe with all
+// authored DV/RPU/EL processing intact, then use its APL/chroma result to choose
+// the final target envelope. This avoids a second 4K intermediate for P5, P7,
+// P8.1 and P10.
+static bool measure_open_dovi_signal(struct priv *p,
+                                     const struct pl_frame_mix *mix,
+                                     const struct pl_render_params *params,
+                                     float display_peak, float display_black,
+                                     float *avg_y, float *avg_max, float *ratio)
+{
+    if (!prepare_sdr_probe(p))
+        return false;
+    if (!p->rr_sdr_cal)
+        p->rr_sdr_cal = pl_renderer_create(p->pllog, p->gpu);
+    if (!p->rr_sdr_cal)
+        return false;
+
+    struct pl_frame probe = {
+        .repr = pl_color_repr_rgb,
+        .color = pl_color_space_srgb,
+        .num_planes = 1,
+        .planes[0] = {.texture=p->dovi_sdr_probe_tex,.components=4,
+                      .component_mapping={0,1,2,3}},
+        .crop = {0,0,DOVI_PROBE_W,DOVI_PROBE_H},
+    };
+    probe.color.hdr.max_luma = display_peak;
+    if (display_black > 0 && display_black < display_peak)
+        probe.color.hdr.min_luma = display_black;
+    pl_color_space_infer(&probe.color);
+
+    struct pl_render_params mapping = *params;
+    mapping.dither_params = NULL;
+    mapping.force_dither = false;
+    mapping.force_low_bit_depth_fbos = false;
+    mapping.skip_caching_single_frame = true;
+    if (!pl_render_image_mix(p->rr_sdr_cal, mix, &probe, &mapping))
+        return false;
+    return read_sdr_probe(p, avg_y, avg_max, ratio);
+}
+
+static float update_sdr_signal_peak(struct priv *p,
+                                    const struct pl_frame_mix *mix,
+                                    const struct pl_render_params *params,
+                                    float signal_anchor, float display_peak,
+                                    float display_black, bool direct_probe)
+{
+    const struct pl_hdr_metadata *hdr = mix->num_frames > 0
+        ? &mix->frames[0]->color.hdr : NULL;
+    const float avg_pq_y = hdr ? hdr->avg_pq_y : 0.0f;
+    const bool adaptive = p->next_opts->dovi_sdr_adaptive;
+    if (adaptive && (!p->adaptive_context_valid || p->adaptive_peak != display_peak ||
+        p->adaptive_black != display_black || p->adaptive_anchor != signal_anchor ||
+        p->adaptive_direct != direct_probe)) {
+        p->adaptive_context_valid = true;
+        p->adaptive_peak = display_peak;
+        p->adaptive_black = display_black;
+        p->adaptive_anchor = signal_anchor;
+        p->adaptive_direct = direct_probe;
+        p->dovi_sdr_probe_valid = false;
+    } else if (!adaptive) {
+        p->adaptive_context_valid = false;
+    }
+    const bool fel = mix_has_fel_residual(mix);
+    const float source_max_nits = fel
+        ? mix_source_max_pq_y_nits(mix) : 0.0f;
+    const float fel_peak = p7_fel_signal_floor(signal_anchor, display_peak,
+                                                source_max_nits);
+    const bool fel_cut = !p->dovi_sdr_probe_valid ||
+        fel != p->dovi_sdr_probe_fel ||
+        fabsf(fel_peak - p->dovi_sdr_probe_fel_peak) > 2.0f;
+    const bool metadata_cut = !p->dovi_sdr_probe_valid ||
+        fel_cut ||
+        (avg_pq_y > 0 &&
+         fabsf(avg_pq_y - p->dovi_sdr_probe_avg_pq_y) > 0.01f);
+    const double probe_interval = direct_probe ? 0.50 : 0.20;
+    const bool time_due = !p->dovi_sdr_probe_valid ||
+        p->last_pts < p->dovi_sdr_probe_pts ||
+        p->last_pts - p->dovi_sdr_probe_pts >= probe_interval;
+
+    if (metadata_cut || time_due) {
+        float avg_y, avg_max, ratio;
+        bool measured = direct_probe
+            ? measure_open_dovi_signal(p, mix, params, display_peak,
+                                       display_black, &avg_y, &avg_max, &ratio)
+            : measure_sdr_signal(p, &avg_y, &avg_max, &ratio);
+        if (measured) {
+            // High-APL frames and low-APL, strongly chromatic frames benefit
+            // from more code-value headroom. Other program material stays at
+            // the brighter sustained anchor. All transitions are continuous.
+            const float bright = sdr_signal_smoothstep(0.72f, 0.82f, avg_y);
+            const float chroma = 1.0f -
+                sdr_signal_smoothstep(0.71f, 0.73f, ratio);
+            const float mid_low = sdr_signal_smoothstep(0.08f, 0.18f, avg_y);
+            const float mid_high = 1.0f -
+                sdr_signal_smoothstep(0.32f, 0.45f, avg_y);
+            const float dark = 1.0f -
+                sdr_signal_smoothstep(0.02f, 0.08f, avg_y);
+            const float headroom = MPMAX(bright, chroma * mid_low * mid_high);
+            float next_peak = signal_anchor +
+                0.4f * (display_peak - signal_anchor) * headroom;
+            next_peak = MPMAX(next_peak, signal_anchor +
+                0.15f * (display_peak - signal_anchor) * dark);
+
+            // BL reshape and EL/NLQ composition have already run inside the
+            // measured probe. RPU maxY now guides only the final display
+            // envelope; it is metadata, never treated as another image layer.
+            next_peak = MPMAX(next_peak, fel_peak);
+            next_peak = MPCLAMP(next_peak, signal_anchor, display_peak);
+
+            const bool visual_cut = fel_cut ||
+                fabsf(avg_y - p->dovi_sdr_probe_avg_y) > 0.15f ||
+                fabsf(ratio - p->dovi_sdr_probe_ratio) > 0.08f;
+            p->dovi_sdr_signal_peak = visual_cut ? next_peak
+                : 0.65f * p->dovi_sdr_signal_peak + 0.35f * next_peak;
+            p->dovi_sdr_probe_valid = true;
+            p->dovi_sdr_probe_pts = p->last_pts;
+            p->dovi_sdr_probe_avg_pq_y = avg_pq_y;
+            p->dovi_sdr_probe_avg_y = avg_y;
+            p->dovi_sdr_probe_avg_max = avg_max;
+            p->dovi_sdr_probe_ratio = ratio;
+            p->dovi_sdr_probe_source_max_nits = source_max_nits;
+            p->dovi_sdr_probe_fel_peak = fel_peak;
+            p->dovi_sdr_probe_fel = fel;
+            if (adaptive) {
+                struct dvsdr_gain next = dvsdr_policy(p->adaptive_scene, display_peak,
+                                                      signal_anchor, display_black);
+                // Protection acts immediately; smoothly ramp gains up within a shot.
+                if (!visual_cut) {
+                    next.high = fminf(next.high, .65f*p->adaptive_gain.high + .35f*next.high);
+                    next.low = fminf(next.low, .65f*p->adaptive_gain.low + .35f*next.low);
+                }
+                p->adaptive_gain = next;
+                MP_VERBOSE(p, "DV SDR adaptive: gain-high %.5f low %.5f APL %.4f "
+                           "shoulder %.4f near-white %.4f FEL %s display %.3f/%.4f anchor %.3f\n",
+                           next.high,next.low,avg_y,p->adaptive_scene.shoulder,p->adaptive_scene.near_white,
+                           fel ? "yes" : "no",display_peak,display_black,signal_anchor);
+            }
+            MP_VERBOSE(p, "DV SDR probe update: signal %.3f, FEL %s, "
+                          "authored maxY %.3f nit, avgY %.4f, avgMax %.4f\n",
+                       p->dovi_sdr_signal_peak, fel ? "paired" : "no",
+                       source_max_nits, avg_y, avg_max);
+        } else if (adaptive) {
+            // A missing sample cannot authorize a highlight boost.
+            p->adaptive_gain = (struct dvsdr_gain){0};
+        }
+    }
+
+    return p->dovi_sdr_probe_valid
+        ? MPCLAMP(p->dovi_sdr_signal_peak, signal_anchor, display_peak)
+        : signal_anchor;
+}
+
+static bool open_dovi_mix(const struct pl_frame_mix *mix)
+{
+    if (mix->num_frames <= 0)
+        return false;
+    for (int i = 0; i < mix->num_frames; i++) {
+        const struct mp_image *mpi = mix->frames[i]->user_data;
+        const struct frame_priv *fp = mpi ? mpi->priv : NULL;
+        if (!fp || !fp->has_dovi ||
+            mix->frames[i]->repr.sys != PL_COLOR_SYSTEM_DOLBYVISION)
+            return false;
+    }
+    return true;
+}
+
+static bool apply_open_dovi_sdr_target(struct priv *p,
+                                       const struct pl_frame_mix *mix,
+                                       struct pl_frame *target,
+                                       const struct pl_render_params *params)
+{
+    if (staged_sdr_eligible(p, mix, target) || !open_dovi_mix(mix) ||
+        pl_color_transfer_is_hdr(target->color.transfer))
+        return false;
+
+    const float display_peak = p->next_opts->dovi_sdr_display_peak;
+    const float display_black = p->next_opts->dovi_sdr_display_black;
+    if (!(display_peak > 0) || !isfinite(display_peak))
+        return false;
+
+    float signal_peak = display_peak;
+    const float requested_anchor = p->next_opts->dovi_sdr_signal_anchor;
+    if (requested_anchor > 0 && isfinite(requested_anchor)) {
+        const float signal_anchor = MPMIN(requested_anchor, display_peak);
+        signal_peak = update_sdr_signal_peak(p, mix, params, signal_anchor,
+                                             display_peak, display_black, true);
+    }
+    target->color.hdr.max_luma = signal_peak;
+    target->color.hdr.max_cll = signal_peak;
+    if (display_black > 0 && display_black < display_peak &&
+        isfinite(display_black))
+    {
+        target->color.hdr.min_luma = signal_peak * display_black / display_peak;
+    }
+
+    if (!p->dovi_sdr_probe_logged) {
+        MP_INFO(p, "DV SDR dynamic probe: P5/P7/P8.1/P10-capable 32x18 "
+                   "mapping, display %.3f/%.6f -> signal %.3f "
+                   "(avgY %.4f, avgMax %.4f, Y/max %.4f, "
+                   "FEL %s, authored maxY %.3f nit)\n",
+                   display_peak, display_black, signal_peak,
+                   p->dovi_sdr_probe_avg_y, p->dovi_sdr_probe_avg_max,
+                   p->dovi_sdr_probe_ratio,
+                   p->dovi_sdr_probe_fel ? "paired" : "no",
+                   p->dovi_sdr_probe_source_max_nits);
+        p->dovi_sdr_probe_logged = true;
+    }
+    return true;
+}
+
+struct adaptive_hook_state {
+    struct pl_hook hook;
+    const struct pl_hook *hooks[1];
+    float gain[3]; // upper amplitude, lower amplitude, FEL driver selection
+};
+
+static struct pl_hook_res adaptive_sdr_hook(void *priv, const struct pl_hook_params *p)
+{
+    const struct pl_shader_var strength = {
+        .var = pl_var_vec3("dv_sdr_strength"), .data = priv, .dynamic = true,
+    };
+    bool ok = pl_shader_custom(p->sh, &(struct pl_custom_shader){
+        .input = PL_SHADER_SIG_COLOR, .output = PL_SHADER_SIG_COLOR,
+        .variables = &strength, .num_variables = 1,
+        .body =
+            "vec3 c = color.rgb;\n"
+            "float y = dot(c, vec3(0.2126,0.7152,0.0722));\n"
+            "float m = max(c.r,max(c.g,c.b));\n"
+            "float n = min(c.r,min(c.g,c.b));\n"
+            "float lower = dv_sdr_strength.y * smoothstep(0.045,0.20,y) * (1.0-smoothstep(0.27,0.405,y));\n"
+            "c *= 1.0 - lower/max(y,0.0001);\n"
+            "if (dv_sdr_strength.z > 0.5) {\n"
+            // FEL colors may be saturated even below the neutral luminance band.
+            // Scale RGB together rather than desaturating the FEL contribution.
+            "  float h = dv_sdr_strength.x * smoothstep(0.60,0.83,m) * (1.0-smoothstep(0.87,1.0,m));\n"
+            "  h *= smoothstep(0.15,0.30,m-n) * smoothstep(0.20,0.40,y);\n"
+            "  c *= 1.0 + min(h,max(0.0,1.0-m))/max(m,0.0001);\n"
+            "} else {\n"
+            "  float h = dv_sdr_strength.x * smoothstep(0.60,0.83,y) * (1.0-smoothstep(0.87,1.0,y));\n"
+            "  h *= 1.0-smoothstep(0.975,0.999,m);\n"
+            "  c = mix(c,vec3(1.0),clamp(h/max(0.0001,1.0-y),0.0,1.0));\n"
+            "}\n"
+            "color.rgb = c;\n",
+    });
+    return (struct pl_hook_res){.failed = !ok, .output = PL_HOOK_SIG_NONE};
+}
+
+static void apply_adaptive_sdr_hook(struct priv *p, const struct pl_frame *target,
+                                    struct pl_render_params *params, struct adaptive_hook_state *state,
+                                    bool direct)
+{
+    // No stacking onto a device simulation, creative LUT, wide output or non-SDR.
+    if (!p->next_opts->dovi_sdr_adaptive || !p->next_opts->dovi_display ||
+        !p->adaptive_context_valid || !p->dovi_sdr_probe_valid || p->adaptive_direct != direct ||
+        p->adaptive_anchor <= 0 || p->next_opts->dovi_sdr_signal_anchor <= 0 ||
+        target->icc || target->lut || params->num_hooks ||
+        target->repr.sys != PL_COLOR_SYSTEM_RGB || target->repr.levels == PL_COLOR_LEVELS_LIMITED ||
+        target->color.transfer != PL_COLOR_TRC_SRGB || target->color.primaries != PL_COLOR_PRIM_BT_709 ||
+        !(p->adaptive_gain.high > 0 || p->adaptive_gain.low > 0))
+        return;
+    state->gain[0] = p->adaptive_gain.high;
+    state->gain[1] = p->adaptive_gain.low;
+    state->gain[2] = p->dovi_sdr_probe_fel;
+    state->hook = (struct pl_hook){
+        .stages = PL_HOOK_OUTPUT, .input = PL_HOOK_SIG_COLOR,
+        .priv = state->gain, .hook = adaptive_sdr_hook, .signature = 0x44565344524131ULL,
+    };
+    state->hooks[0] = &state->hook;
+    params->hooks = state->hooks;
+    params->num_hooks = 1;
+}
+
+static bool render_sdr_stages(struct priv *p, const struct pl_frame_mix *mix,
+                              const struct pl_frame *target,
+                              const struct pl_render_params *params)
+{
+    if (!staged_sdr_eligible(p, mix, target)) {
+        struct adaptive_hook_state adaptive;
+        struct pl_render_params direct = *params;
+        if (open_dovi_mix(mix) && p->next_opts->dovi_sdr_display_peak > 0)
+            apply_adaptive_sdr_hook(p, target, &direct, &adaptive, true);
+        return pl_render_image_mix(p->rr, mix, target, &direct);
+    }
+
+    const int w = target->planes[0].texture->params.w;
+    const int h = target->planes[0].texture->params.h;
+    pl_fmt fmt = pl_find_fmt(p->gpu, PL_FMT_FLOAT, 4, 32, 32,
+                            PL_FMT_CAP_RENDERABLE | PL_FMT_CAP_SAMPLEABLE |
+                            PL_FMT_CAP_BLITTABLE);
+    if (!fmt || !pl_tex_recreate(p->gpu, &p->dovi_sdr_tex, pl_tex_params(
+            .w=w,.h=h,.format=fmt,.renderable=true,.sampleable=true,.blit_dst=true,
+            .host_readable=!!p->next_opts->dovi_sdr_dump))) {
+        MP_ERR(p, "Cannot create FP32 SDR intermediate\n");
+        return false;
+    }
+    if (!p->rr_sdr_cal)
+        p->rr_sdr_cal = pl_renderer_create(p->pllog, p->gpu);
+    if (!p->rr_sdr_cal)
+        return false;
+
+    // Windows SDR reference white and the measured physical panel peak are
+    // different quantities. Keep auto reference white for SDR/HDR composition
+    // and subtitles, but let an explicit target-peak describe this staged
+    // P8.4 display envelope. This is device capability, not scene exposure.
+    const struct gl_video_opts *opts = p->opts_cache->opts;
+    float reference_white = get_ref_luma(p);
+    if (!(reference_white > 0) || !isfinite(reference_white))
+        reference_white = PL_COLOR_SDR_WHITE;
+    float display_peak = p->next_opts->dovi_sdr_display_peak;
+    if (!(display_peak > 0) || !isfinite(display_peak))
+        display_peak = opts->target_peak;
+    if (!(display_peak > 0) || !isfinite(display_peak))
+        display_peak = target->color.hdr.max_luma;
+    if (!(display_peak > 0) || !isfinite(display_peak))
+        display_peak = reference_white;
+
+    // Keep the system SDR reference white (OSD/composition semantics), the
+    // measured display peak (hard physical envelope), and the SDR signal
+    // anchor (tone-distribution choice) as separate quantities. When the
+    // anchor is unset, retain the old fixed-reference behavior exactly.
+    const bool dynamic_signal = p->next_opts->dovi_sdr_signal_anchor > 0 &&
+        isfinite(p->next_opts->dovi_sdr_signal_anchor);
+    float signal_anchor = dynamic_signal
+        ? p->next_opts->dovi_sdr_signal_anchor : reference_white;
+    signal_anchor = MPMIN(signal_anchor, display_peak);
+    float signal_peak = signal_anchor;
+    struct pl_frame sdr = {
+        .repr = pl_color_repr_rgb,
+        .color = pl_color_space_srgb,
+        .num_planes = 1,
+        .planes[0] = {.texture=p->dovi_sdr_tex,.components=4,
+                      .component_mapping={0,1,2,3}},
+        .crop = target->crop,
+        .rotation = target->rotation,
+    };
+    // Keep the display black floor together with its measured peak. Inferring
+    // SDR from the peak alone silently falls back to 1000:1 and lifts shadows
+    // on displays whose negotiated/calibrated target can go darker.
+    sdr.color.hdr.max_luma = display_peak;
+    if (p->next_opts->dovi_sdr_display_black > 0 &&
+        p->next_opts->dovi_sdr_display_black < display_peak &&
+        isfinite(p->next_opts->dovi_sdr_display_black))
+        sdr.color.hdr.min_luma = p->next_opts->dovi_sdr_display_black;
+    else if (target->color.hdr.min_luma > 0 &&
+             target->color.hdr.min_luma < display_peak &&
+             isfinite(target->color.hdr.min_luma))
+        sdr.color.hdr.min_luma = target->color.hdr.min_luma;
+    pl_color_space_infer(&sdr.color);
+    struct pl_render_params mapping = *params;
+    mapping.dither_params = NULL;
+    mapping.force_dither = false;
+    mapping.force_low_bit_depth_fbos = false;
+    // RPU/L1 and source HDR fields remain attached to the original source.
+    // Existing explicit peak-detection / RPU-off behavior is not overridden.
+    if (!pl_render_image_mix(p->rr, mix, &sdr, &mapping))
+        return false;
+    dump_sdr_boundary(p, &sdr);
+    if (dynamic_signal && display_peak > signal_anchor)
+        signal_peak = update_sdr_signal_peak(p, mix, NULL, signal_anchor,
+                                             display_peak,
+                                             p->next_opts->dovi_sdr_display_black,
+                                             false);
+
+    // The second renderer receives only SDR RGB: no RPU, HDR scene statistics,
+    // EL, source LUT, user hooks or artistic color adjustment a second time.
+    struct pl_render_params calibration = pl_render_default_params;
+    struct pl_color_map_params cm = pl_color_map_default_params;
+    cm.tone_mapping_function = &pl_tone_map_clip;
+    cm.gamut_mapping = &pl_gamut_map_relative;
+    calibration.color_map_params = &cm;
+    calibration.dither_params = params->dither_params;
+    calibration.force_low_bit_depth_fbos = false;
+    calibration.skip_caching_single_frame = true;
+    calibration.blend_params = params->blend_params;
+    sdr.rotation = 0;
+    struct pl_frame calibrated = *target;
+    calibrated.rotation = 0;
+    // The first renderer maps against the measured physical envelope. The
+    // second renderer encodes that result through a metadata-driven signal
+    // peak. Advanced DV to SDR supplies a nominal BT.709/sRGB target and keeps
+    // renderer-side ICC disabled; any hardware VCGT remains outside this pass.
+    calibrated.color.hdr.max_luma = signal_peak;
+    if (p->next_opts->dovi_sdr_display_black > 0 &&
+        p->next_opts->dovi_sdr_display_black < display_peak)
+        calibrated.color.hdr.min_luma = signal_peak *
+            p->next_opts->dovi_sdr_display_black / display_peak;
+    else if (opts->target_contrast > 0)
+        calibrated.color.hdr.min_luma = signal_peak / opts->target_contrast;
+    if (!p->dovi_sdr_logged) {
+        MP_INFO(p, "DV SDR stages: reconstructed DV -> FP32 BT709/sRGB "
+                   "system reference %.3f, measured display peak %.3f, "
+                   "signal anchor %.3f -> dynamic signal peak %.3f "
+                   "(mapped avgY %.4f, avgMax %.4f, Y/max %.4f) -> "
+                   "renderer ICC %s; "
+                   "no RGB gain\n",
+                   reference_white, display_peak, signal_anchor, signal_peak,
+                   p->dovi_sdr_probe_avg_y, p->dovi_sdr_probe_avg_max,
+                   p->dovi_sdr_probe_ratio, target->icc ? "yes":"no");
+        p->dovi_sdr_logged = true;
+    }
+    struct adaptive_hook_state adaptive;
+    if (dynamic_signal && display_peak > signal_anchor)
+        apply_adaptive_sdr_hook(p, &calibrated, &calibration, &adaptive, false);
+    return pl_render_image(p->rr_sdr_cal, &sdr, &calibrated, &calibration);
+}
+
+
+static void dump_presented_rgb(struct priv *p, const struct pl_frame *target)
+{
+    const char *path = p->next_opts->display_rgb_dump;
+    if (!path || p->display_rgb_done) return;
+    p->display_rgb_done = true;
+    const int w=320,h=180;
+    pl_fmt fmt=pl_find_fmt(p->gpu,PL_FMT_FLOAT,4,32,32,
+                          PL_FMT_CAP_RENDERABLE|PL_FMT_CAP_SAMPLEABLE);
+    pl_tex tex=fmt ? pl_tex_create(p->gpu,pl_tex_params(
+        .w=w,.h=h,.format=fmt,.renderable=true,.host_readable=true)) : NULL;
+    pl_dispatch dp=pl_dispatch_create(p->pllog,p->gpu);
+    bool ok=tex && dp;
+    if(ok) {
+        pl_shader sh=pl_dispatch_begin(dp);
+        ok=pl_shader_sample_nearest(sh,pl_sample_src(
+            .tex=target->planes[0].texture,.new_w=w,.new_h=h,.components=4));
+        if(ok) ok=pl_dispatch_finish(dp,pl_dispatch_params(.shader=&sh,.target=tex));
+        else pl_dispatch_abort(dp,&sh);
+    }
+    float pixels[320*180*4];
+    if(ok) ok=pl_tex_download(p->gpu,pl_tex_transfer_params(.tex=tex,.ptr=pixels));
+    FILE *f=ok?fopen(path,"wb"):NULL;
+    if(f){ok=fwrite(pixels,sizeof(float),w*h*4,f)==w*h*4;fclose(f);}else ok=false;
+    char *side=talloc_asprintf(NULL,"%s.json",path);
+    f=fopen(side,"w");
+    if(f){fprintf(f,"{\"ok\":%s,\"stage\":\"actual-swapchain-before-present\","
+        "\"width\":320,\"height\":180,\"pts\":%.9g,\"icc\":%s,"
+        "\"staged\":%s,\"max_luma\":%.9g,\"min_luma\":%.9g,"
+        "\"primaries\":%d,\"transfer\":%d}\n",ok?"true":"false",
+        p->last_pts,target->icc?"true":"false",
+        p->next_opts->dovi_sdr_staged?"true":"false",
+        target->color.hdr.max_luma,target->color.hdr.min_luma,
+        target->color.primaries,target->color.transfer);fclose(f);}
+    MP_INFO(p,"Actual presentation RGB %s; ICC %s\n",ok?"saved":"FAILED",
+            target->icc?"yes":"no");
+    talloc_free(side);pl_tex_destroy(p->gpu,&tex);pl_dispatch_destroy(&dp);
+}
+
 static void apply_crop(struct pl_frame *frame, struct mp_rect crop,
                        int width, int height)
 {
@@ -1398,6 +2209,11 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
             p->last_id = 0;
             p->want_reset = false;
             p->flush_cache = true;
+            if (p->next_opts->dovi_sdr_adaptive) {
+                p->dovi_sdr_probe_valid = false;
+                p->adaptive_context_valid = false;
+                p->adaptive_gain = (struct dvsdr_gain){0};
+            }
         }
 
         if (p->flush_cache) {
@@ -1433,8 +2249,12 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
         target_csp = sw->fns->target_csp(sw);
     if (target_csp.primaries == PL_COLOR_PRIM_UNKNOWN)
         target_csp.primaries = mp_get_best_prim_container(&target_csp.hdr.prim);
-    if (!pl_color_transfer_is_hdr(target_csp.transfer)) {
-        // limit min_luma to 1000:1 contrast ratio in SDR mode
+    if (!p->next_opts->dovi_sdr_staged &&
+        !(opts->target_contrast > 0) &&
+        !pl_color_transfer_is_hdr(target_csp.transfer)) {
+        // Ordinary auto SDR keeps the upstream plausibility guard. Staged DV
+        // and an explicit measured/ICC contrast retain their black level so a
+        // valid device target is not replaced by the generic 1000:1 fallback.
         if (target_csp.hdr.min_luma > PL_COLOR_SDR_WHITE / PL_COLOR_SDR_CONTRAST)
             target_csp.hdr.min_luma = 0;
     }
@@ -1624,7 +2444,7 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
         // Windows assumes the display is sRGB. It doesn't perform gamma
         // conversion, or any conversions would roundtrip back to sRGB.
         // In which case the EOTF depends on the display.
-        // Ideally, compositors would agree on how to handle sRGB, but I’ll
+        // Ideally, compositors would agree on how to handle sRGB, but I窶冤l
         // leave that part of the story for the reader to explore.
         // Note: Older Windows versions, without ACM, were not able to convert
         // sRGB to PQ output. We are not concerned about this case, as it would
@@ -1724,6 +2544,10 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
                 fp->osd_sync = 0;
             }
 
+            apply_dovi_display(p, image);
+            // A paused DM toggle changes pixels without changing the decoder.
+            ((uint64_t *) mix.signatures)[i] ^= (uint64_t)p->next_opts->dovi_display << 47;
+
             // Update the frame signature to include the current OSD sync
             // value, in order to disambiguate between identical frames with
             // modified OSD. Shift the OSD sync value by a lot to avoid
@@ -1734,20 +2558,32 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
             ((uint64_t *) mix.signatures)[i] ^= fp->osd_sync << 48;
         }
 
+        // P8.4 keeps its full-size FP32 boundary. Other open-DV profiles use a
+        // tiny off-screen probe to receive the same scene-adaptive display
+        // envelope without paying for another 4K intermediate.
+        apply_open_dovi_sdr_target(p, &mix, &target, &params);
+
         // Update dynamic hook parameters
         for (int i = 0; i < pars->params.num_hooks; i++)
             update_hook_opts_dynamic(p, p->hooks[i], frame->current);
     }
 
+    // Do not mix measured maxRGB/average into authored P8.4 SDR adaptation.
+    // Explicit peak detection and RPU-display-off retain their old behavior.
+    const bool authored_l1 = use_authored_dovi_l1(p, &mix, &target);
+    if (authored_l1)
+        params.peak_detect_params = NULL;
+
     // Render frame
     stats_time_start(p->stats, "render");
-    bool render_ok = pl_render_image_mix(p->rr, &mix, &target, &params);
+    bool render_ok = render_sdr_stages(p, &mix, &target, &params);
     stats_time_end(p->stats, "render");
     if (!render_ok) {
         MP_ERR(vo, "Failed rendering frame!\n");
         goto done;
     }
 
+    dump_presented_rgb(p, &target);
     struct pl_frame ref_frame;
     pl_frames_infer_mix(p->rr, &mix, &target, &ref_frame);
 
@@ -1765,7 +2601,10 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
 
     if (vo->params) {
         // Augment metadata with the peak detection results
-        vo->has_peak_detect_values = pl_renderer_get_hdr_metadata(p->rr, &vo->params->color.hdr);
+        if (authored_l1)
+            vo->params->color.hdr = ref_frame.color.hdr;
+        vo->has_peak_detect_values = !authored_l1 &&
+            pl_renderer_get_hdr_metadata(p->rr, &vo->params->color.hdr);
     }
     mp_mutex_unlock(&vo->params_mutex);
 
@@ -2034,6 +2873,9 @@ static void video_screenshot(struct vo *vo, struct voctrl_screenshot *args)
         target.color.transfer = PL_COLOR_TRC_GAMMA22;
     }
 
+    if (use_authored_dovi_l1(p, &mix, &target))
+        params.peak_detect_params = NULL;
+
     apply_crop(&image, src, mpi->params.w, mpi->params.h);
     apply_crop(&target, dst, fbo->params.w, fbo->params.h);
     update_tm_viz(&pars->color_map_params, &target);
@@ -2072,7 +2914,22 @@ static void video_screenshot(struct vo *vo, struct voctrl_screenshot *args)
         image.num_overlays = 0;
     }
 
-    if (!pl_render_image(p->rr, &image, &target, &params)) {
+    apply_dovi_display(p, &image);
+    // Screenshot crop, subtitle selection and reference handling belong to the
+    // local image. Never substitute the unmodified queued frame here.
+    const struct pl_frame *screenshot_frames[] = {&image};
+    struct pl_frame_mix screenshot_mix = mix;
+    screenshot_mix.num_frames = 1;
+    screenshot_mix.frames = screenshot_frames;
+    apply_open_dovi_sdr_target(p, &screenshot_mix, &target, &params);
+    struct adaptive_hook_state adaptive;
+    bool staged = staged_sdr_eligible(p, &screenshot_mix, &target);
+    if (!staged && open_dovi_mix(&screenshot_mix) && p->next_opts->dovi_sdr_display_peak > 0)
+        apply_adaptive_sdr_hook(p, &target, &params, &adaptive, true);
+    bool screenshot_ok = staged
+        ? render_sdr_stages(p, &screenshot_mix, &target, &params)
+        : pl_render_image(p->rr, &image, &target, &params);
+    if (!screenshot_ok) {
         MP_ERR(vo, "Failed rendering frame!\n");
         goto done;
     }
@@ -2456,6 +3313,10 @@ static void uninit(struct vo *vo)
         pl_gpu_finish(p->gpu);
 
     pl_queue_destroy(&p->queue); // destroy this first
+    pl_tex_destroy(p->gpu, &p->dovi_mask_tex);
+    pl_tex_destroy(p->gpu, &p->dovi_sdr_tex);
+    pl_tex_destroy(p->gpu, &p->dovi_sdr_probe_tex);
+    pl_renderer_destroy(&p->rr_sdr_cal);
     for (int i = 0; i < MP_ARRAY_SIZE(p->osd_state.entries); i++)
         pl_tex_destroy(p->gpu, &p->osd_state.entries[i].tex);
     for (int i = 0; i < p->num_sub_tex; i++)

@@ -1,13 +1,17 @@
-# Open edition: Windows 2.1.1
+# Open edition: Windows 2.2.0 pre-release
+
+See the [release notes and known limits](release-2.2.0.md), and find public builds on [GitHub Releases](https://github.com/sdy623/mpv.config/releases).
 
 Video and audio are independent choices. Windows Dolby video processing may run together with Omniphony object audio. Omniphony does not implement Dolby Vision video.
+
+[Advanced Dolby Vision SDR Rendering (gpu-next)](advanced-dv-hdr-sdr.md) is the open mapping path for eligible Windows SDR-only displays. It does not require the optional Dolby extension below.
 
 ## Windows dependency
 Use Microsoft Store or the device manufacturer to install a compatible licensed Dolby Vision extension. No Dolby extension binary, Store package, private credential or display ICC is supplied. `windows/native-dv/Detect-Dependencies.ps1` checks the current user's Store-signed package identity and status. Detection is not entitlement verification, support for every DV profile, or evidence of processing. The filter's runtime frame counters and fallback state remain authoritative.
 
 The Windows-processing candidate currently requires a single display with a system ICC profile. It reads that profile at runtime instead of distributing a device-specific profile; other setups retain the original mapping.
 
-P7 MEL RPU is adapted in memory to the Windows P8-compatible boundary. P8.4 retains HLG signaling. FEL is rejected by this boundary and remains on the original renderer. The tested internal panel target is SDR; this is not certified native DV HDR output. The user's original media is not rewritten.
+P7 MEL RPU is adapted in memory to the Windows P8-compatible boundary. P7 FEL first reconstructs the synchronized BL+EL contribution through the ABI-matched GPU helper, quantizes that result to P010 and adapts the RPU for the same Windows boundary. If the helper or frame contract is unavailable, the unmodified BL/EL remains on gpu-next. P8.4 retains HLG signaling. The tested internal panel target is SDR; this is not certified native DV HDR output. The user's original media is not rewritten.
 
 ## Omniphony: install the optional components yourself
 
@@ -34,7 +38,7 @@ The public candidate uses the same source-backed integrated core for its origina
 ## Build and release status
 The exact integrated MPV source is in `core/mpv`; upstream revision pins are in `sources.lock.json`. Existing UI/config and plugin submodules are retained. Native bridge source is in `windows/native-dv`. See its build.cmd and RPU adapter instructions; Visual Studio and Windows SDK are build dependencies, not redistribution payloads.
 
-The Windows 2.1.1 candidate packages the integrated core and merged configuration with known Windows-DV resume drops. See [verification and limitations](release-2.1.1.md), [assembly instructions](../packaging/windows/README.md), and [exact native dependency sources](native-dependency-sources.json). The companion source archive includes the integrated sources, submodule sources, pinned RPU dependency and required ASIO headers. Vendor runtime notices and source-availability information remain in the installer. Fresh full dependency recompilation and bit-identical reproduction were not performed during packaging. Antivirus vendor review remains pending; functional launch success is not a clean antivirus verdict.
+The pre-release uses the integrated core and merged portable configuration. See the [assembly instructions](../packaging/windows/README.md) and [exact native dependency sources](native-dependency-sources.json). The companion source archive provides the corresponding integrated and submodule sources, pinned RPU dependency and required ASIO headers. Vendor runtime notices and source-availability information are included with the installer. See the [release notes](release-2.2.0.md) for the checks and limitations of this particular build.
 
 ## Theme helper and generic display defaults
 
@@ -42,7 +46,7 @@ The source tree excludes prebuilt ziggy executables. File-picker features need t
 
 
 ## 2.1.0 changes
-The current source adds explicit PQ/HLG GPU transport, FP16 HLG output, generic
-XYZ/ICM DCP playback and pre-roll-aware DV seeks. These changes are included in 2.1.0. See [candidate status](post-2.0.0-candidate.md) for measured improvements
+Version 2.1.0 introduced explicit PQ/HLG GPU transport, FP16 HLG output, generic
+XYZ/ICM DCP playback and pre-roll-aware DV seeks. See [candidate status](post-2.0.0-candidate.md) for measured improvements
 and remaining playback failures. Official Dolby dependency detection, separate
 Omniphony/libfreemkv installation and original mapping remain required contracts.
