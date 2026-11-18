@@ -1,12 +1,27 @@
 -- HDR/DV diagnostics and session-local gpu-next controls.
 -- Native playback is an optional separate MediaEngine window. Never label PQ as DV.
 local utils=require 'mp.utils'
-local options={start_mode='display-auto',advanced_reference='50e88c0',advanced_peak='auto',advanced_full_frame='auto',advanced_black='auto',advanced_staged='yes',advanced_signal_anchor='auto',advanced_mapping='perceptual',advanced_calibration='none',advanced_lut='',advanced_profile_file='script-opts/advanced_display_profiles.json',advanced_adaptive_highlights='no'}
+local options={start_mode='display-auto',advanced_reference='50e88c0',advanced_peak='auto',advanced_full_frame='auto',advanced_black='auto',advanced_staged='yes',advanced_signal_anchor='auto',advanced_mapping='auto',advanced_calibration='none',advanced_lut='',advanced_profile_file='script-opts/advanced_display_profiles.json',advanced_adaptive_highlights='no'}
 pcall(function()require('mp.options').read_options(options,'advanced_color_management')end)
 local adaptive_requested=tostring(options.advanced_adaptive_highlights):lower()=='yes'
 local adaptive_option='gpu-next-dovi-sdr-adaptive'
 local adaptive_supported=mp.get_property_native('options/'..adaptive_option)~=nil
 local display_profiles={}
+-- Device-specific viewing preset, not a measurement or a new Windows default.
+local builtin_display_profiles={
+    ['DISPLAY\\BOE0CFB']={peak_nits=616,black_nits=0.203,signal_anchor_nits=270,
+        gamut_mapping='darken',source='BOE0CFB Advanced SDR preset'},
+}
+local function monitor_profile(dependency)
+    local id=tostring(dependency.monitor_id or '')
+    local profile={}
+    for k,v in pairs(builtin_display_profiles[id:upper()] or {}) do profile[k]=v end
+    local user=display_profiles[id] or display_profiles[tostring(dependency.display_name or '')]
+    if type(user)=='table' then
+        for k,v in pairs(user) do profile[k]=v end
+    end
+    return profile
+end
 do
     local requested=tostring(options.advanced_profile_file or '')
     local path=requested~='' and ((mp.find_config_file and mp.find_config_file(requested)) or requested) or nil
@@ -33,7 +48,14 @@ local function normalize_advanced_mapping(value)
     end
     return 'perceptual'
 end
-local advanced_mapping=normalize_advanced_mapping(options.advanced_mapping)
+local advanced_mapping_override
+local function effective_advanced_mapping(dependency)
+    if advanced_mapping_override then return advanced_mapping_override end
+    if tostring(options.advanced_mapping):lower()~='auto' then
+        return normalize_advanced_mapping(options.advanced_mapping)
+    end
+    return normalize_advanced_mapping(monitor_profile(dependency).gamut_mapping)
+end
 local advanced_calibration_modes={'none','system-icc','displaycal-lut'}
 local advanced_calibration_labels={
     none='设备 SDR 直出（无 ICM）',
@@ -82,8 +104,9 @@ local function advanced_display_target()
     local explicit_black=tonumber(options.advanced_black)
     local inside=mp.get_property_native('user-data/windows-dv-inwindow',{})
     local dependency=type(inside.dependency)=='table' and inside.dependency or {}
-    local device_profile=display_profiles[tostring(dependency.monitor_id or '')] or
-        display_profiles[tostring(dependency.display_name or '')] or {}
+    local device_profile=monitor_profile(dependency)
+    local profile_anchor=tonumber(device_profile.signal_anchor_nits)
+    if profile_anchor and (profile_anchor<40 or profile_anchor>10000) then profile_anchor=nil end
     local profile_peak=tonumber(device_profile.peak_nits)
     local profile_full_frame=tonumber(device_profile.full_frame_nits)
     local profile_black=tonumber(device_profile.black_nits)
@@ -120,7 +143,7 @@ local function advanced_display_target()
         full_frame,full_frame_source=peak,'same-as-peak'
     end
     if peak and full_frame then full_frame=math.max(40,math.min(full_frame,peak)) end
-    local signal_anchor=explicit_anchor or full_frame or peak
+    local signal_anchor=explicit_anchor or profile_anchor or full_frame or peak
     if peak and signal_anchor then signal_anchor=math.max(40,math.min(signal_anchor,peak)) end
     local display_key=tostring(dependency.display_name or '')..'|'..tostring(dependency.monitor_id or '')
     if target_black and target_black>0 and target_black<5 and
@@ -350,6 +373,7 @@ local function apply()
     -- output that Windows positively identifies as SDR-only. HDR-capable,
     -- HDR-active and not-yet-probed outputs stay on ordinary gpu-next.
     local advanced_dv=advanced_source_dv and display_sdr_only
+    local advanced_mapping=effective_advanced_mapping(dependency)
     local staged_dv=advanced_dv and ((profile==8 and playback.base_transfer=='hlg') or
         (inside.source_dv==true and inside.source_base_transfer=='hlg'))
     -- The optional appearance pass belongs only to the open DV -> SDR route.
@@ -546,6 +570,7 @@ local function menu()
         {title='Advanced DV to SDR（独立动态映射）',active=mode=='advanced-dv-to-sdr' and inside.enabled~=true,value={'script-message-to','hdr_controls','mode','advanced-dv-to-sdr'}},
         {title='SDR 映射 + 系统 ICC（参考亮度 auto）',active=mode=='sdr-reference',value={'script-message-to','hdr_controls','mode','sdr-reference'}},
         {title='跟随显示器：自动 SDR / HDR10（不是原生 DV）',active=mode=='display-auto',value={'script-message-to','hdr_controls','mode','display-auto'}}}
+    local advanced_mapping=effective_advanced_mapping(type(inside.dependency)=='table' and inside.dependency or {})
     local mapping_items={}
     for _,value in ipairs(advanced_mapping_modes) do
         mapping_items[#mapping_items+1]={title=advanced_mapping_labels[value],active=advanced_mapping==value,
@@ -627,7 +652,7 @@ mp.register_script_message('advanced-mapping',function(value)
         mp.msg.warn('Rejected unsupported Advanced gamut mapping mode')
         return
     end
-    advanced_mapping=requested
+    advanced_mapping_override=requested
     apply();menu()
 end)
 mp.register_script_message('advanced-calibration',function(value)

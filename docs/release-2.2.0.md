@@ -1,4 +1,4 @@
-# Super-MPV-Player 2.2.0 Windows 开放预览版
+# Super-MPV-Player 2.2.0 Windows 开放版
 
 ## 本版功能
 
@@ -6,7 +6,8 @@
 - **Advanced Dolby Vision SDR Rendering (gpu-next)。** 把 Dolby Vision 映射到 Windows 识别为仅支持 SDR 的屏幕。无需 Dolby 扩展，输出 SDR。可选的自适应高光按显示余量和场景分配亮度，避免大面积白和暗场小高光被一起推亮。
 - **Omniphony 对象音频。** 有兼容引擎和解码桥时，可将受支持的 Atmos 等音轨渲染到双耳耳机或指定音箱布局。引擎与桥分开安装，音频模式可搭配任一视频路径。
 - **蓝光与影院包。** 光驱、ISO 和 BDMV 文件夹可使用兼容的 BD-J 菜单；加密光盘须自备后端。无加密 2D DCP 按 CPL 组合画面与 PCM 音轨，XYZ 画面经 gpu-next 浮点处理与显示器 ICM 输出。不支持 KDM 或 DCP 字幕。
-- **UOSC 播放界面。** 时间轴保留缩略图和章节，`i` 面板显示源色彩、场景亮度、DV 元数据状态与渲染路径。
+- **BOE0CFB 内屏预设。** 仅在手动进入 Advanced DV to SDR 且系统识别为 SDR-only 时，自动用 darken、616 峰值参数、0.203 黑位参数和 270 信号锚点。不是仪器实测值，也不改变其他显示器或 Windows Dolby。
+- **UOSC 播放界面。** 右键菜单恢复 macOS 深色风格；底栏保留 HDR/DV、EL、RPU 和视频详情。 时间轴保留缩略图和章节，`i` 面板显示源色彩、场景亮度、DV 元数据状态与渲染路径。
 
 [查看各 Dolby Vision Profile 与对象音频的验证范围](playback-capabilities.md)。
 
@@ -18,7 +19,7 @@
 
 每个安装目录默认用自己的 `portable_config/watch_later` 保存续播位置。旧播放器的全局续播记录不自动导入，以免恢复旧的视频滤镜。
 
-## 这个预览版验证了什么
+## 这个版本验证了什么
 
 - P8.4 的同帧软件 A/B 覆盖中亮、高占比白与暗场点光；P7 FEL 覆盖配对增强层下的局部彩色高光。截图和渲染缓冲对比验证 SDR 信号码值，不是屏幕实测亮度，也不等于厂商 Dolby 映射。
 - Windows Dolby 处理 P8.4 的 283 帧时，Omniphony 同步解码 E-AC-3 JOC / Atmos。短测识别 `LFE+15 objects`，输出 48 kHz 双声道 PCM。
@@ -26,4 +27,4 @@
 - HDR-capable、HDR-active 或 Windows 尚未识别的显示器，以及普通 HDR10/HLG，交由常规 gpu-next 路径。其他屏幕、长时播放下的观感和完整测色流程尚需验证。
 - 已知限制：P7 FEL 随机跳转若从没有足够 EL 参考帧的 BL 随机访问点开始，首个可用配对帧可能晚于目标。Windows Dolby 可选路径仍可能在暂停恢复时掉帧。此版本没有把两者标记为已修复。
 
-发行包不含厂商 Dolby 组件、设备 ICC、个人 LUT、视频样本、Omniphony 引擎或 libfreemkv。可选依赖、许可和源码构建入口见[开放版说明](open-edition.md)。旧稳定 release 与撤回的历史版本状态不变。
+发行包不含厂商 Dolby 组件、设备 ICC、个人 LUT、视频样本、Omniphony 引擎或 libfreemkv。可选依赖、许可和源码构建入口见[开放版说明](open-edition.md)。旧版本及现有安装不受影响。

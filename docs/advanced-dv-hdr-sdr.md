@@ -17,7 +17,7 @@ Peak luminance, sustained white, black level and Windows' SDR reference white ar
 ## Start with a same-display A/B
 
 1. Play a Dolby Vision clip on the intended screen. Keep the Windows output, panel picture preset and backlight fixed. Use **Ctrl+Alt+H** to open the HDR menu, then choose **Advanced DV to SDR (独立动态映射)**. The menu selection switches away from optional Windows Dolby processing.
-2. Start with automatic display parameters and the default perceptual gamut mapping. Use **device SDR direct output (设备 SDR 直出)** on a screen already in a suitable sRGB/Rec.709 mode. On a wide-gamut screen that needs device correction, try **system-installed ICC (系统安装 ICC)** instead; direct output may look too saturated there.
+2. Start with automatic display parameters. Unmatched displays default to perceptual gamut mapping; the BOE0CFB inner panel uses a dedicated darken preset. Its 616 / 0.203 / 270 values are software parameters (peak / black / signal anchor), not physical measurements. An explicit gamut setting overrides the panel preset. Use **device SDR direct output (设备 SDR 直出)** on a screen already in a suitable sRGB/Rec.709 mode. On a wide-gamut screen that needs device correction, try **system-installed ICC (系统安装 ICC)** instead; direct output may look too saturated there.
 3. To test the extra highlight refinement, set the following in `portable_config/script-opts/advanced_color_management.conf`, restart the player, and select Advanced again. It is **off by default** and requires direct full-range BT.709/sRGB RGB output, without mpv ICC, a target LUT or a competing output shader.
 
    ```ini

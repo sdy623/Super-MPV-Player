@@ -7,7 +7,7 @@ if not re.fullmatch('[0-9a-f]{40}',args.core_source_tree):
  parser.error('--core-source-tree must be a full Git tree ID')
 R=Path(__file__).resolve().parent;P=R/'payload'
 (P/'portable_config/config-version').write_text('v2.2.0-open\n',encoding='utf8')
-(P/'安装与启动说明.txt').write_text('''Super-MPV-Player 2.2.0 — 综合播放器开放预览版
+(P/'安装与启动说明.txt').write_text('''Super-MPV-Player 2.2.0 — 综合播放器开放版
 
 使用英文安装路径（新装默认 D:\\Apps\\Super-MPV-Player）。本版本的蓝光 Java 运行时不支持中文安装路径，安装器会提前拒绝，原始媒体文件名不受此安装路径限制。
 Windows Dolby Vision：标准启动器在检测到兼容组件时尝试 Windows 处理；请从 Microsoft Store 或设备厂商安装扩展。本包不含 Dolby 专有组件、激活材料或设备 ICC。当前色彩配置适配单显示器；多屏或缺少系统配置时回退到原映射。SDR 屏输出 SDR。

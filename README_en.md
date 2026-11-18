@@ -2,7 +2,7 @@
 
 A Windows player built on mpv. Use the Windows Dolby Vision processor when available, or play Dolby Vision on an SDR-only screen with the open renderer.
 
-**Windows open edition 2.2.0 pre-release:** [Download](https://github.com/sdy623/Super-MPV-Player/releases) · [Release notes and known limits](docs/release-2.2.0.md) · [中文](README.md)
+**Windows open edition 2.2.0:** [Download](https://github.com/sdy623/Super-MPV-Player/releases) · [Release notes and known limits](docs/release-2.2.0.md) · [中文](README.md)
 
 - **[Windows Dolby Vision processing](docs/open-edition.md#windows-dependency).** The preferred video path on a compatible setup. Install the licensed component via Microsoft Store or the device manufacturer. The player attempts Windows processing for eligible streams and stays on gpu-next if it can't use it. Check the processed-frame count and fallback state in the HDR menu.
 - **[Advanced Dolby Vision SDR Rendering (gpu-next)](docs/advanced-dv-hdr-sdr.md).** Maps brightness and color using available Dolby Vision metadata on displays Windows reports as SDR-only. Optional adaptive highlights use display headroom and scene brightness, so large white fields and small highlights in dark scenes don't get a blanket boost. No Dolby extension is required; output is SDR, not a native Dolby Vision signal.

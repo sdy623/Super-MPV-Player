@@ -11,7 +11,7 @@ local p={
  ['user-data/dv-playback']={profile=8,base_transfer='hlg'},
  ['user-data/windows-dv-inwindow']={windows_processed=false,source_dv=true,source_base_transfer='hlg',
   dependency={display_peak_nits=270,display_full_frame_nits=80,display_black_nits=0.5,
-   display_contrast=540,display_target_source='dxgi-output-desc1',display_name='\\\\.\\DISPLAY1',monitor_id='DISPLAY\\BOE0CFB',
+   display_contrast=540,display_target_source='dxgi-output-desc1',display_name='\\\\.\\DISPLAY1',monitor_id='DISPLAY\\TEST-CALIBRATED',
    display_color_mode='sdr',display_hdr_supported=false,display_hdr_active=false,
    dxgi_output={max_luminance_nits=270,max_full_frame_luminance_nits=270,min_luminance_nits=0.203,
     bits_per_color=10,color_space=0,source='dxgi-output-desc1'},
@@ -35,7 +35,7 @@ mp={
 }
 package.preload['mp.utils']=function()return {
  format_json=function()return '{}' end,
- parse_json=function()return {profiles={['DISPLAY\\BOE0CFB']={peak_nits=400,full_frame_nits=270,source='colorimeter+manufacturer'}}} end,
+ parse_json=function()return {profiles={['DISPLAY\\TEST-CALIBRATED']={peak_nits=400,full_frame_nits=270,source='colorimeter+manufacturer'}}} end,
  file_info=function(path)if path=='D:\\calibration\\displaycal.cube' then return {is_file=true} end end,
 }end
 package.preload['mp.options']=function()return {read_options=function(o)
@@ -51,6 +51,26 @@ package.loaded['mp.utils']=nil;package.loaded['mp.options']=nil
 
 assert(loadfile(target))()
 observers['video-params']();timers[#timers]()
+local dependency=p['user-data/windows-dv-inwindow'].dependency
+local fixture_monitor=dependency.monitor_id
+dependency.monitor_id='DISPLAY\\BOE0CFB'
+observers['video-target-params']();timers[#timers]()
+assert(p['options/gamut-mapping-mode']=='darken' and
+       tonumber(p['options/gpu-next-dovi-sdr-display-peak'])==616 and
+       tonumber(p['options/gpu-next-dovi-sdr-display-black'])==0.203 and
+       tonumber(p['options/gpu-next-dovi-sdr-signal-anchor'])==270 and
+       p['options/icc-profile-auto']==false,
+ 'BOE preset applies only to matched SDR Advanced output')
+assert(p['user-data/hdr-controls'].advanced_target.full_frame==80,
+ 'BOE anchor is not the DXGI full-frame report')
+dependency.monitor_id='DISPLAY\\OTHER'
+observers['video-target-params']();timers[#timers]()
+assert(p['options/gamut-mapping-mode']=='perceptual' and
+       tonumber(p['options/gpu-next-dovi-sdr-display-peak'])==270 and
+       tonumber(p['options/gpu-next-dovi-sdr-signal-anchor'])==80,
+ 'another output stays on auto targets and default gamut mapping')
+dependency.monitor_id=fixture_monitor
+observers['video-target-params']();timers[#timers]()
 local adaptive_requested=os.getenv('TEST_ADAPTIVE_OPT_IN')=='yes'
 assert(p['options/gpu-next-dovi-sdr-adaptive']==adaptive_requested,
  'adaptive highlights require an explicit opt-in on the Advanced DV SDR route')

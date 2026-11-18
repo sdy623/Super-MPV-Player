@@ -21,12 +21,12 @@ const INPUT_CONFIGS = [
   {
     suffix: "zh",
     file: "input.conf",
-    mpvConf: `script-opts=modernz-language="zh",uosc-languages="zh-hans",uosc-controls="play-pause,menu,gap,subtitles,<has_many_audio>audio,<has_many_video>video,<has_many_edition>editions,<stream>stream-quality,button:danmaku,button:danmaku_menu,cycle:toggle_on:show_danmaku@uosc_danmaku:on=toggle_on/off=toggle_off?弹幕开关,gap,space,speed,space,shuffle,loop-playlist,loop-file,toggle:push_pin:ontop,gap,prev,items,next,gap,fullscreen"`,
+    mpvConf: `script-opts=modernz-language="zh",uosc-languages="zh-hans",uosc-controls="cycle:play_arrow:pause:no=pause/yes=play_arrow?Play/Pause,menu,button:hdr_dv,button:dv_el,button:dv_rpu,button:video_details,gap,subtitles,<has_many_audio>audio,<has_many_video>video,<has_many_edition>editions,<stream>stream-quality,button:danmaku,button:danmaku_menu,cycle:toggle_on:show_danmaku@uosc_danmaku:on=toggle_on/off=toggle_off?弹幕开关,gap,space,speed,space,shuffle,loop-playlist,loop-file,toggle:push_pin:ontop?窗口置顶,gap,prev,items,next,gap,fullscreen"`,
   },
   {
     suffix: "zh-TW",
     file: "input_zh-TW.conf",
-    mpvConf: `script-opts=modernz-language="zh-TW",uosc-languages="zh-TW",uosc-controls="play-pause,menu,gap,subtitles,<has_many_audio>audio,<has_many_video>video,<has_many_edition>editions,<stream>stream-quality,button:danmaku,button:danmaku_menu,cycle:toggle_on:show_danmaku@uosc_danmaku:on=toggle_on/off=toggle_off?彈幕開關,gap,space,speed,space,shuffle,loop-playlist,loop-file,toggle:push_pin:ontop,gap,prev,items,next,gap,fullscreen"`,
+    mpvConf: `script-opts=modernz-language="zh-TW",uosc-languages="zh-TW",uosc-controls="cycle:play_arrow:pause:no=pause/yes=play_arrow?Play/Pause,menu,button:hdr_dv,button:dv_el,button:dv_rpu,button:video_details,gap,subtitles,<has_many_audio>audio,<has_many_video>video,<has_many_edition>editions,<stream>stream-quality,button:danmaku,button:danmaku_menu,cycle:toggle_on:show_danmaku@uosc_danmaku:on=toggle_on/off=toggle_off?彈幕開關,gap,space,speed,space,shuffle,loop-playlist,loop-file,toggle:push_pin:ontop?視窗置頂,gap,prev,items,next,gap,fullscreen"`,
   },
   // 英文版
   {

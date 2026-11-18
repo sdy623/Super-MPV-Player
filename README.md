@@ -2,7 +2,7 @@
 
 基于 mpv 的 Windows 播放器。可使用系统 Dolby Vision 组件处理视频，也能在仅支持 SDR 的屏幕上用开放渲染路径播放 Dolby Vision。
 
-**Windows 2.2.0 开放预览版**：[下载](https://github.com/sdy623/Super-MPV-Player/releases) · [版本说明与已知限制](docs/release-2.2.0.md) · [English](README_en.md)
+**Windows 2.2.0 开放版**：[下载](https://github.com/sdy623/Super-MPV-Player/releases) · [版本说明与已知限制](docs/release-2.2.0.md) · [English](README_en.md)
 
 - **[Windows Dolby Vision 处理](docs/open-edition.md#windows-dependency)。** 有兼容环境时优先使用。安装 Microsoft Store 或设备厂商提供的授权组件后，播放器会尝试处理符合条件的输入。未能接管时，视频留在 gpu-next。以 HDR 菜单里的处理帧数和回退状态为准。
 - **[Advanced Dolby Vision SDR Rendering (gpu-next)](docs/advanced-dv-hdr-sdr.md)。** 面向 Windows 识别为仅支持 SDR 的屏幕，按显示能力和片源元数据映射亮度与色域。可选的自适应高光根据屏幕余量和场景决定何时加亮，也会约束大面积白和暗场小高光。无需 Dolby 扩展，显示链路只输出 SDR。
