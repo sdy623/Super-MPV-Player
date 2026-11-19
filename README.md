@@ -5,6 +5,7 @@
 **Windows 2.2.0 开放版**：[下载](https://github.com/sdy623/Super-MPV-Player/releases) · [版本说明与已知限制](docs/release-2.2.0.md) · [English](README_en.md)
 
 - **[Windows Dolby Vision 处理](docs/open-edition.md#windows-dependency)。** 有兼容环境时优先使用。安装 Microsoft Store 或设备厂商提供的授权组件后，播放器会尝试处理符合条件的输入。未能接管时，视频留在 gpu-next。以 HDR 菜单里的处理帧数和回退状态为准。
+- **[Dolby SDR Bridge](docs/release-2.3.0-preview.1.md)（2.3.0 预览）。** Windows 有 Dolby 视频处理、内屏却不能开 HDR 时，可让 Windows Dolby 在 SDR 屏上映射 HDR10 和 HLG。播放时生成动态元数据，不预扫、不转码。开关默认关闭。
 - **[Advanced Dolby Vision SDR Rendering (gpu-next)](docs/advanced-dv-hdr-sdr.md)。** 面向 Windows 识别为仅支持 SDR 的屏幕，按显示能力和片源元数据映射亮度与色域。可选的自适应高光根据屏幕余量和场景决定何时加亮，也会约束大面积白和暗场小高光。无需 Dolby 扩展，显示链路只输出 SDR。
 - **可选音频模式：[Omniphony 对象音频](docs/open-edition.md#omniphony-install-the-optional-components-yourself)。** 使用兼容解码桥，将受支持的 Atmos 等音轨渲染为双耳耳机或按音箱布局输出。引擎与解码桥须自行安装；音频可搭配任一视频模式。
 - **蓝光原盘。** 打开光驱、ISO 或 BDMV 文件夹，可使用兼容的 BD-J 原盘菜单。加密光盘需要自行配置可用的解密后端；安装包不含密钥。
@@ -31,7 +32,7 @@
 
 ## 上游主题与独立配置包
 
-以下为沿用的跨平台主题与配置说明。Windows 开放版的修改内核和功能请使用上方的安装包；上游 mpv 或单独的配置 ZIP 不包含这些修改。
+以下为沿用的跨平台主题与配置说明。Windows 专用功能需要完整播放器；上游 mpv 或单独的配置 ZIP 不含修改的内核。
 
 ## 简要说明
 

@@ -42,8 +42,9 @@ local function update()
     local src=mp.get_property_native('video-params',{})
     local out=mp.get_property_native('video-out-params',{})
     local win=mp.get_property_native('user-data/windows-dv-inwindow',{})
+    local bridge=win.bridge or {}
     local p7,dependent,declared_el=false,false,false
-    local profile=tonumber(native_meta()["source-profile"]) or 0
+    local profile=bridge.attached and win.source_profile or tonumber(native_meta()["source-profile"]) or 0
     for _,t in ipairs(mp.get_property_native('track-list',{})) do
         if t.type=='video' then
             if t.selected and t['dolby-vision-profile'] then profile=tonumber(t['dolby-vision-profile']) or profile end
@@ -62,7 +63,8 @@ local function update()
     local rpuoff=rpu_disabled()
     local control=native_meta()['comparison-controls']=='yes'
     local canel=active and dual_seen and not rpuoff and (not win.enabled or control)
-    local canrpu=profile~=5 and (not win.enabled or native_meta()['rpu-disable-supported']=='yes')
+    local canrpu=not bridge.attached and (profile>0 or win.source_dv or rpuoff)
+        and profile~=5 and (not win.enabled or native_meta()['rpu-disable-supported']=='yes')
     local bk=tostring(active and dual_seen)..':'..tostring(off)..':'..tostring(win.enabled==true)..':'..tostring(control)..':'..tostring(rpuoff)..':'..profile
     if bk~=button_key then
         button_key=bk
@@ -84,8 +86,9 @@ local function update()
     local rendered=active and not mp.get_property_bool('idle-active',true)
         and mp.get_property_number('time-pos')~=nil
         and mp.get_property('current-vo')=='gpu-next'
-    local route=rendered and ((win.enabled and filter_has('windows_dv')) and 'windows'
-        or out.colormatrix=='dolbyvision' and 'libplacebo' or rpuoff and 'libplacebo') or ''
+    local route=rendered and (bridge.processing and 'bridge'
+        or not bridge.attached and ((win.enabled and filter_has('windows_dv')) and 'windows'
+        or out.colormatrix=='dolbyvision' and 'libplacebo' or rpuoff and 'libplacebo')) or ''
     if mp.get_property_native('user-data/dcp',{}).active then route='' end
     local base=src['gamma-original'] or win.source_base_transfer or src.gamma or 'unknown'
     mp.set_property_native('user-data/dv-playback',{
@@ -100,7 +103,8 @@ local function update()
     local key=route..(off and ':no-el' or '')..(rpuoff and ':no-rpu' or '')
     if route~='' and key~=announced then
         announced=key
-        notice(route=='windows' and ((rpuoff and 'Windows HDR → SDR' or 'Windows Dolby → SDR')..(rpuoff and ' · RPU 显示作用关闭' or '')..(off and ' · EL 贡献关闭' or ''))
+        notice(route=='bridge' and (win.badge or 'Dolby SDR Bridge → SDR')
+            or route=='windows' and ((rpuoff and 'Windows HDR → SDR' or 'Windows Dolby → SDR')..(rpuoff and ' · RPU 显示作用关闭' or '')..(off and ' · EL 贡献关闭' or ''))
             or rpuoff and 'gpu-next · RPU/EL 关闭 · 兼容基础层（BL-only）'
             or off and '解 DV · gpu-next / libplacebo · EL 已关闭'
             or '解 DV · gpu-next / libplacebo')

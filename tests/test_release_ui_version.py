@@ -3,9 +3,13 @@ import unittest,json
 R=Path(__file__).resolve().parents[1]
 class ReleaseUiTests(unittest.TestCase):
  def test_version_sources(self):
-  self.assertEqual((R/'VERSION').read_text(encoding='utf-8').strip(),'2.2.0')
-  self.assertEqual(json.loads((R/'package.json').read_text(encoding='utf-8'))['version'],'2.2.0')
-  self.assertEqual(json.loads((R/'sources.lock.json').read_text(encoding='utf-8'))['runtime_candidate'],'2.2.0')
+  version=(R/'VERSION').read_text(encoding='utf-8').strip()
+  self.assertEqual(json.loads((R/'package.json').read_text(encoding='utf-8'))['version'],version)
+  lock=json.loads((R/'package-lock.json').read_text(encoding='utf-8'))
+  self.assertEqual(lock['version'],version)
+  self.assertEqual(lock['packages']['']['version'],version)
+  self.assertEqual(json.loads((R/'sources.lock.json').read_text(encoding='utf-8'))['runtime_candidate'],version)
+  self.assertTrue((R/'docs'/f'release-{version}.md').is_file())
   self.assertIn("readFileSync",(R/'build.js').read_text(encoding='utf-8'))
   self.assertNotIn('git describe',(R/'build.js').read_text(encoding='utf-8'))
  def test_font_defaults(self):

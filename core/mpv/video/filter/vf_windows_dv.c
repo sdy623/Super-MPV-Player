@@ -26,10 +26,29 @@
 #include "video/fmt-conversion.h"
 #include "wdv_frames.h"
 #include "fel_abi.h"
+#include <wchar.h>
+#include "rtpq_stats.h"
+#include "p84_cache_key.h"
+#include "rt84_gpu.h"
+
+/* Embedded into the standalone filter TU only. LGPL-2.1-or-later. */
+
+
+struct rt_dovi_data { const uint8_t *data; size_t len; };
+struct rt_dovi_list { void *const *list; size_t len; const char *error; };
+struct rt_dovi {
+    HMODULE mod;
+    const struct rt_dovi_list *(__cdecl *generate)(const char *);
+    const struct rt_dovi_data *(__cdecl *write)(void *);
+    void (__cdecl *free_list)(const struct rt_dovi_list *);
+    void (__cdecl *free_data)(const struct rt_dovi_data *);
+};
+
+
 
 #define BATCH 6
 #define READY_CAP (BATCH * 2)
-struct opts { char *dll; char *output_icc; bool gpu_float; bool fel_experiment; };
+struct opts { char *dll; char *output_icc; bool gpu_float; bool fel_experiment; bool realtime_p81; bool realtime_p84; };
 typedef int (__cdecl *render_fn)(const wdv_frame_v2 *, uint32_t, uint32_t,
                                uint32_t, wdv_output_v2 *, char *, uint32_t);
 typedef void *(__cdecl *create_fn)(void);
@@ -78,6 +97,18 @@ struct priv {
     char error[1024], last_error[1024];
     const char *state;
     unsigned long long rpu_seen, processed_frames;
+    struct rt_dovi rt_api;
+    struct rtpq_lut rt_lut;
+    struct rtpq_state rt_state,rt84_state;
+    struct rt84_gpu rt84_gpu;
+    struct { uint32_t key; AVBufferRef *nal; } rt84_cache[P84_CACHE_CAP];
+    unsigned long long rt84_hits, rt84_serialized;
+    unsigned long long rt84_frames,rt84_cuts;
+    double rt84_ms;
+    bool rt84_failed;
+    AVBufferRef *rt_rpu[BATCH];
+    unsigned long long rt_epoch, rt_frames, rt_cuts;
+    double rt_last_ms;
     bool paired_el;
     enum pl_color_transfer source_transfer;
 };
@@ -150,6 +181,139 @@ static struct mp_image *p010(struct mp_image *img)
     return out;
 }
 
+static bool rtpq_load(struct rt_dovi *d, HMODULE bridge)
+{
+    if(!bridge) return false;
+    wchar_t path[32768];
+    DWORD n=GetModuleFileNameW(bridge,path,MP_ARRAY_SIZE(path));
+    if(!n || n>=MP_ARRAY_SIZE(path)) return false;
+    wchar_t *end=wcsrchr(path,L'\\');
+    if(!end || end+MP_ARRAY_SIZE(L"\\libdovi.dll")>=path+MP_ARRAY_SIZE(path)) return false;
+    wcscpy(end,L"\\libdovi.dll");
+    d->mod=LoadLibraryExW(path,NULL,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if(!d->mod) return false;
+    d->generate=(void*)GetProcAddress(d->mod,"dovi_generate_from_json");
+    d->write=(void*)GetProcAddress(d->mod,"dovi_write_unspec62_nalu");
+    d->free_list=(void*)GetProcAddress(d->mod,"dovi_rpu_list_free");
+    d->free_data=(void*)GetProcAddress(d->mod,"dovi_data_free");
+    if(d->generate && d->write && d->free_list && d->free_data) return true;
+    FreeLibrary(d->mod);*d=(struct rt_dovi){0};
+    return false;
+}
+
+static bool rtpq_eligible(const struct mp_image *img)
+{
+    return img->imgfmt==IMGFMT_D3D11 && img->params.hw_subfmt==IMGFMT_P010 && img->hwctx &&
+        !img->enhancement_layer && !img->dovi && !img->params.repr.dovi && !raw_rpu((struct mp_image *)img) &&
+        img->params.transfer_orig==PL_COLOR_TRC_PQ && img->params.primaries_orig==PL_COLOR_PRIM_BT_2020 &&
+        img->params.sys_orig==PL_COLOR_SYSTEM_BT_2020_NC && img->params.repr.levels==PL_COLOR_LEVELS_LIMITED &&
+        (img->params.chroma_location==PL_CHROMA_LEFT || img->params.chroma_location==PL_CHROMA_TOP_LEFT) &&
+        img->params.color.hdr.max_luma>=100 && img->params.color.hdr.max_luma<=10000 &&
+        img->pts!=MP_NOPTS_VALUE && isfinite(img->pts) && img->nominal_fps>=12 && img->nominal_fps<=120;
+}
+
+static AVBufferRef *rtpq_make(struct mp_filter *f,struct mp_image *img)
+{
+    struct priv *p=f->priv;
+    LARGE_INTEGER started, done, freq;
+    QueryPerformanceFrequency(&freq);QueryPerformanceCounter(&started);
+    struct mp_image *sw=p010(img);
+    struct rtpq_frame stats;
+    bool good=sw && rtpq_analyze(&p->rt_lut,(const void*)sw->planes[0],sw->stride[0],
+                              (const void*)sw->planes[1],sw->stride[1],img->w,img->h,&stats);
+    talloc_free(sw);
+    if(!good) return NULL;
+    struct rtpq_meta fields=rtpq_push(&p->rt_state,&stats,img->pts,img->nominal_fps);
+    // The libdovi V40 generator uses these bounds; keep input and observed RPU consistent.
+    int min=MPCLAMP(fields.min,0,12), peak=MPCLAMP(fields.peak,2081,4095);
+    int avg=MPCLAMP(fields.avg,1229,peak-1);
+    const struct pl_hdr_metadata *hdr=&img->params.color.hdr;
+    int prim=8; // known BT.2020 default; Level9 indices are verified below.
+    const struct pl_raw_primaries *pr=&hdr->prim;
+    if(fabs(pr->red.x-.680)<.005 && fabs(pr->green.y-.690)<.005) prim=0; // P3-D65, as in the source SEI
+    else if(fabs(pr->red.x-.708)<.005 && fabs(pr->green.y-.797)<.005) prim=2;
+    char l9[128]="";
+    if(prim==0 || prim==2)
+        snprintf(l9,sizeof(l9),"\"default_metadata_blocks\":[{\"Level9\":{\"length\":1,\"source_primary_index\":%d}}],",prim);
+    char json[1024];
+    snprintf(json,sizeof(json),
+        "{\"cm_version\":\"V40\",\"profile\":\"8.1\",\"length\":2,%s"
+        "\"level6\":{\"max_display_mastering_luminance\":%d,\"min_display_mastering_luminance\":%d,"
+        "\"max_content_light_level\":%d,\"max_frame_average_light_level\":%d},"
+        "\"shots\":[{\"start\":0,\"duration\":2,\"metadata_blocks\":[{\"Level1\":"
+        "{\"min_pq\":%d,\"avg_pq\":%d,\"max_pq\":%d}}]}]}",
+        l9,(int)lround(hdr->max_luma),(int)lround(fmax(0,hdr->min_luma)*10000.),
+        (int)lround(fmax(0,hdr->max_cll)),(int)lround(fmax(0,hdr->max_fall)),min,avg,peak);
+    const struct rt_dovi_list *list=p->rt_api.generate(json);
+    const struct rt_dovi_data *nal=list && list->len==2 ? p->rt_api.write(list->list[fields.cut?0:1]) : NULL;
+    AVBufferRef *buf=nal && nal->len>2 ? av_buffer_alloc(nal->len) : NULL;
+    if(buf) memcpy(buf->data,nal->data,nal->len);
+    if(nal) p->rt_api.free_data(nal);
+    if(list) p->rt_api.free_list(list);
+    if(!buf) return NULL;
+    QueryPerformanceCounter(&done);
+    p->rt_last_ms=1000.0*(done.QuadPart-started.QuadPart)/freq.QuadPart;
+    p->rt_frames++;p->rt_cuts+=fields.cut;
+    MP_DBG(f,"rt-p81 gen=%llu pts=%.6f cut=%d window=%d framepeak=%d min=%d avg=%d max=%d analyze_ms=%.3f\n",
+           p->rt_epoch,img->pts,fields.cut,p->rt_state.count,stats.peak,min,avg,peak,p->rt_last_ms);
+    return buf;
+}
+
+/* Optional HLG branch only. The original HLG surface is handed to Windows Dolby. */
+static bool rt84_eligible(struct mp_image *img)
+{
+    return img->imgfmt==IMGFMT_D3D11 && img->params.hw_subfmt==IMGFMT_P010 && img->hwctx &&
+        !img->enhancement_layer && !img->dovi && !img->params.repr.dovi && !raw_rpu(img) &&
+        img->params.transfer_orig==PL_COLOR_TRC_HLG && img->params.primaries_orig==PL_COLOR_PRIM_BT_2020 &&
+        img->params.sys_orig==PL_COLOR_SYSTEM_BT_2020_NC && img->params.repr.levels==PL_COLOR_LEVELS_LIMITED &&
+        (img->params.chroma_location==PL_CHROMA_LEFT || img->params.chroma_location==PL_CHROMA_TOP_LEFT) &&
+        img->pts!=MP_NOPTS_VALUE && isfinite(img->pts) && img->nominal_fps>=12 && img->nominal_fps<=120;
+}
+
+static AVBufferRef *rt84_make(struct mp_filter *f,struct mp_image *img)
+{
+    struct priv *p=f->priv;
+    LARGE_INTEGER started,done,freq;
+    QueryPerformanceFrequency(&freq);QueryPerformanceCounter(&started);
+    struct rtpq_frame stats;
+    if(!rt84_analyze(f,&p->rt84_gpu,img,&stats))return NULL;
+    struct rtpq_meta fields=rtpq_push(&p->rt84_state,&stats,img->pts,img->nominal_fps);
+    int min=MPCLAMP(fields.min,0,12),peak=MPCLAMP(fields.peak,2081,3079);
+    int avg=MPCLAMP(fields.avg,1229,peak-1);
+    uint32_t key=p84_key(min,avg,peak,fields.cut);
+    unsigned index=p84_slot(key);
+    AVBufferRef *buf=NULL;
+    if(p->rt84_cache[index].key==key)
+        buf=av_buffer_ref(p->rt84_cache[index].nal);
+    if(buf){
+        p->rt84_hits++;
+    }else{
+        char json[512];
+        snprintf(json,sizeof(json),
+            "{\"cm_version\":\"V40\",\"profile\":\"8.4\",\"length\":2,"
+            "\"shots\":[{\"start\":0,\"duration\":2,\"metadata_blocks\":[{\"Level1\":"
+            "{\"min_pq\":%d,\"avg_pq\":%d,\"max_pq\":%d}}]}]}",min,avg,peak);
+        const struct rt_dovi_list *list=p->rt_api.generate(json);
+        const struct rt_dovi_data *nal=list && list->len==2 ? p->rt_api.write(list->list[fields.cut?0:1]) : NULL;
+        buf=nal && nal->len>2 ? av_buffer_alloc(nal->len) : NULL;
+        if(buf)memcpy(buf->data,nal->data,nal->len);
+        if(nal)p->rt_api.free_data(nal);
+        if(list)p->rt_api.free_list(list);
+        if(!buf)return NULL;
+        av_buffer_unref(&p->rt84_cache[index].nal);
+        AVBufferRef *keep=av_buffer_ref(buf);
+        p->rt84_cache[index].nal=keep;
+        p->rt84_cache[index].key=keep?key:0;
+        p->rt84_serialized++;
+    }
+    QueryPerformanceCounter(&done);
+    p->rt84_ms=1000.0*(done.QuadPart-started.QuadPart)/freq.QuadPart;
+    p->rt84_frames++; p->rt84_cuts+=fields.cut;
+    MP_DBG(f,"rt-p84 gen=%llu pts=%.6f cut=%d window=%d samples=%u framepeak=%d min=%d avg=%d max=%d analyze_ms=%.3f\n",
+           p->rt_epoch,img->pts,fields.cut,p->rt84_state.count,stats.pixels,stats.peak,min,avg,peak,p->rt84_ms);
+    return buf;
+}
+
 // Only the external renderer runs on this worker. MPV image download,
 // ownership, pins and metadata stay on the core thread. Reset discards the
 // outstanding generation without blocking menu/pause/seek commands.
@@ -176,6 +340,7 @@ static void finish_batch(struct mp_filter *f)
     bool ok=p->job_ok && p->rc==p->job_count;
     bool has_rpu=p->job_rpu;
     char *error=p->error;
+    for(int i=0;i<BATCH;i++)av_buffer_unref(&p->rt_rpu[i]);
     if(p->discard){
         for(int i=0;i<BATCH;i++){mp_image_unrefp(&p->pending[i]);mp_image_unrefp(&cpu[i]);mp_image_unrefp(&rgb[i]);}
         p->count=p->ready_count=p->ready_pos=0;p->eof=p->failed=p->discard=false;
@@ -247,7 +412,45 @@ static void begin_batch(struct mp_filter *f)
     p->job_el_off=p->el_off;p->job_rpu_off=p->rpu_off;
     bool has_rpu = false; p->job_fel=false;p->job_reconstructed=false;memset(p->fel,0,sizeof(p->fel));
     struct mp_image *first=p->pending[0];
+    if(p->rt_api.mod && p->opts->realtime_p81){
+        bool eligible=true;
+        for(int i=0;i<p->count;i++) eligible &= rtpq_eligible(p->pending[i]);
+        if(eligible){
+            for(int i=0;i<p->count;i++){
+                p->rt_rpu[i]=rtpq_make(f,p->pending[i]);
+                if(!p->rt_rpu[i]){
+                    eligible=false;
+                    MP_WARN(f,"Realtime P8.1 metadata unavailable; keeping original HDR10.\n");
+                    break;
+                }
+            }
+        }
+        if(!eligible){
+            p->rt_state=(struct rtpq_state){0};
+            for(int i=0;i<p->count;i++)av_buffer_unref(&p->rt_rpu[i]);
+        }
+    }
+    if(p->rt_api.mod && p->opts->realtime_p84 && !p->rt84_failed &&
+       first->params.transfer_orig==PL_COLOR_TRC_HLG){
+        bool eligible=true;
+        for(int i=0;i<p->count;i++)eligible &= rt84_eligible(p->pending[i]);
+        if(eligible){
+            for(int i=0;i<p->count;i++){
+                p->rt_rpu[i]=rt84_make(f,p->pending[i]);
+                if(!p->rt_rpu[i]){
+                    eligible=false;p->rt84_failed=true;
+                    MP_WARN(f,"Realtime P8.4 analysis/generation unavailable; keeping original HLG.\n");
+                    break;
+                }
+            }
+        }
+        if(!eligible){
+            p->rt84_state=(struct rtpq_state){0};
+            for(int i=0;i<p->count;i++)av_buffer_unref(&p->rt_rpu[i]);
+        }
+    }
     AVBufferRef *first_rpu=raw_rpu(first);
+    if(!first_rpu) first_rpu=p->rt_rpu[0];
     p->source_profile=p->classify&&first_rpu?p->classify(first_rpu->data,first_rpu->size,1):0;
     bool p5=p->source_profile==5;
     bool p8=p->source_profile==8 && !first->enhancement_layer;
@@ -277,6 +480,7 @@ static void begin_batch(struct mp_filter *f)
         struct mp_image *img = p->pending[i], *el = img->enhancement_layer;
         AVBufferRef *rpu = el ? raw_rpu(el) : NULL;
         if(!rpu)rpu=raw_rpu(img); // Interleaved streams can retain raw RPU on BL.
+        if(!rpu)rpu=p->rt_rpu[i];
         p->paired_el|=!!el;
         // Original BL transfer describes raw P010, unlike effective DV/PQ tags.
         p->source_transfer = img->params.transfer_orig;
@@ -420,6 +624,15 @@ static void reset(struct mp_filter *f)
     struct priv *p=f->priv;
     p->seek_pts=MP_NOPTS_VALUE;p->seek_skipped=0;mp_image_unrefp(&p->seek_tail);
     p->rpu_seen=p->rpu_forwarded=p->processed_frames=p->gpu_frames=0;p->paired_el=false;p->state="waiting";p->last_error[0]=0;
+    p->rt_state=(struct rtpq_state){0};
+    p->rt_epoch++;p->rt_frames=p->rt_cuts=0;p->rt_last_ms=0;
+    p->rt84_state=(struct rtpq_state){0};
+    p->rt84_frames=p->rt84_cuts=0;p->rt84_ms=0;
+    p->rt84_hits=p->rt84_serialized=0;
+    for(int i=0;i<P84_CACHE_CAP;i++){
+        av_buffer_unref(&p->rt84_cache[i].nal);
+        p->rt84_cache[i].key=0;
+    }
     p->source_transfer=PL_COLOR_TRC_UNKNOWN;
     for(int i=0;i<READY_CAP;i++)mp_image_unrefp(&p->ready[i]);
     p->ready_count=p->ready_pos=0;
@@ -431,6 +644,9 @@ static void destroy(struct mp_filter *f)
 {
     struct priv *p=f->priv;
     if(p->worker){WaitForSingleObject(p->worker,INFINITE);CloseHandle(p->worker);p->worker=NULL;}
+    rt84_destroy(&p->rt84_gpu);
+    if(p->rt_api.mod)FreeLibrary(p->rt_api.mod);
+    for(int i=0;i<BATCH;i++)av_buffer_unref(&p->rt_rpu[i]);
     p->job_pending=false;reset(f);if(p->gpu_session)p->destroy3(p->gpu_session);av_buffer_unref(&p->gpu_pool);av_buffer_unref(&p->output_icc);if(p->hlg_session)p->destroy3(p->hlg_session);if(p->session)p->destroy3(p->session);if(p->dll)FreeLibrary(p->dll);
 }
 static bool command(struct mp_filter *f,struct mp_filter_command *cmd)
@@ -462,6 +678,17 @@ static bool command(struct mp_filter *f,struct mp_filter_command *cmd)
     mp_tags_set_str(t,"seek-preroll-skipped",mp_tprintf(64,"%llu",p->seek_skipped));
     mp_tags_set_str(t,"output-icc",p->job_relative?"none (Windows display-relative)":p->job_float?"none (scRGB)":p->profile_path?p->profile_path:"none");
     mp_tags_set_str(t,"state",p->state?p->state:"waiting");
+    mp_tags_set_str(t,"realtime-p81",p->rt_api.mod && p->opts->realtime_p81?"yes":"no");
+    mp_tags_set_str(t,"realtime-p84",p->rt_api.mod && p->opts->realtime_p84 && !p->rt84_failed?"yes":"no");
+    mp_tags_set_str(t,"rt84-generated",mp_tprintf(64,"%llu",p->rt84_frames));
+    mp_tags_set_str(t,"rt84-cache-hits",mp_tprintf(64,"%llu",p->rt84_hits));
+    mp_tags_set_str(t,"rt84-serializations",mp_tprintf(64,"%llu",p->rt84_serialized));
+    mp_tags_set_str(t,"rt84-scenes",mp_tprintf(64,"%llu",p->rt84_cuts));
+    mp_tags_set_str(t,"rt84-analysis-ms",mp_tprintf(64,"%.3f",p->rt84_ms));
+    mp_tags_set_str(t,"rtpq-epoch",mp_tprintf(64,"%llu",p->rt_epoch));
+    mp_tags_set_str(t,"rtpq-generated",mp_tprintf(64,"%llu",p->rt_frames));
+    mp_tags_set_str(t,"rtpq-scenes",mp_tprintf(64,"%llu",p->rt_cuts));
+    mp_tags_set_str(t,"rtpq-analysis-ms",mp_tprintf(64,"%.3f",p->rt_last_ms));
     mp_tags_set_str(t,"rpu-seen",mp_tprintf(64,"%llu",p->rpu_seen));
     mp_tags_set_str(t,"processed-frames",mp_tprintf(64,"%llu",p->processed_frames));
     mp_tags_set_str(t,"paired-el",p->paired_el?"yes":"no");
@@ -512,6 +739,11 @@ static struct mp_filter *create(struct mp_filter *parent,void *options)
         p->destroy3=(destroy_fn)GetProcAddress(p->dll,"wdv_destroy_v3");
         if(create3&&p->render3&&p->destroy3)p->session=create3();
     }
+    if(p->opts->realtime_p81 || p->opts->realtime_p84){
+        if(rtpq_load(&p->rt_api,p->dll)){
+            if(p->opts->realtime_p81)rtpq_lut_init(&p->rt_lut);
+        }else MP_WARN(f,"Realtime DV generator unavailable; original video path retained.\n");
+    }
     p->state=p->render?"waiting":"unavailable";
     if(!p->render)MP_WARN(f,"Windows DV bridge unavailable; original MPV path retained.\n");
     return f;
@@ -519,6 +751,6 @@ static struct mp_filter *create(struct mp_filter *parent,void *options)
 #define OPT_BASE_STRUCT struct opts
 const struct mp_user_filter_entry vf_windows_dv={
     .desc={.name="windows-dv",.description="Experimental Windows Dolby processing in MPV window",
-        .priv_size=sizeof(struct opts),.options=(const m_option_t[]){{"dll",OPT_STRING(dll)},{"output-icc",OPT_STRING(output_icc)},{"gpu-float",OPT_BOOL(gpu_float)},{"fel-experiment",OPT_BOOL(fel_experiment)},{0}}},
+        .priv_size=sizeof(struct opts),.options=(const m_option_t[]){{"dll",OPT_STRING(dll)},{"output-icc",OPT_STRING(output_icc)},{"gpu-float",OPT_BOOL(gpu_float)},{"fel-experiment",OPT_BOOL(fel_experiment)},{"realtime-p81",OPT_BOOL(realtime_p81)},{"realtime-p84",OPT_BOOL(realtime_p84)},{0}}},
     .create=create,
 };

@@ -537,23 +537,52 @@ local function schedule()
     if timer then timer:kill() end
     timer=mp.add_timeout(0.08,apply)
 end
-local function menu()
-    if mp.get_property_native('user-data/dcp',{}).active==true then mp.commandv('script-message','dcp-color-menu');return end
+local bridge_blocked={
+    checking='正在检测 Windows Dolby',
+    ['probe-failed']='检测失败，选「重新检测官方依赖」重试',
+    ['dolby-missing']='未检测到 Windows Dolby 扩展',
+    ['adapter-missing']='本地 Dolby 组件不完整',
+    ['not-sdr']='当前输出未确认处于 SDR 模式',
+    ['profile-missing']='系统未声明 P8 渲染支持',
+}
+local function bridge_hint(bridge, inside)
+    if not bridge.available then return bridge_blocked[bridge.readiness] or '等待依赖检测' end
+    if not bridge.requested then return '已检测到 Windows Dolby｜HDR10 / HLG → SDR' end
+    if bridge.processing then
+        local profile=(bridge.generated_p84 or 0)>0 and 'P8.4' or 'P8.1'
+        return profile..' → SDR｜已处理 '..tostring(bridge.processed_frames)..' 帧'
+    end
+    if bridge.state=='fallback' then return 'Windows Dolby 未处理｜已回到 gpu-next' end
+    if bridge.attached then return '等待 Windows Dolby 处理帧' end
+    if inside.source_dv then return '保留原片 Dolby Vision 元数据' end
+    return '等待兼容的 HDR10 / HLG'
+end
+local function menu(refresh)
+    if mp.get_property_native('user-data/dcp',{}).active==true then
+        if refresh~=true then mp.commandv('script-message','dcp-color-menu') end
+        return
+    end
     local s=snapshot()
     local native=s.native_backend or {}
     local inside=s.inwindow or {}
+    local bridge=inside.bridge or {}
     local playback=mp.get_property_native('user-data/dv-playback',{})
     local items={{title='输入：'..s.source,selectable=false,muted=true,value={'ignore'}},
         {title='输出：'..s.vo..' / '..(s.target_params.gamma or '未初始化'),selectable=false,muted=true,value={'ignore'}},
-        {title='Windows 杜比处理（MPV 本窗口）',hint=inside.available and (inside.badge or '等待状态') or '依赖未就绪：检查官方扩展与本地适配器',items={
+        {title='Windows 杜比处理（MPV 本窗口）',hint=bridge.attached and '当前使用 Dolby SDR Bridge' or inside.available and (inside.badge or '等待状态') or '依赖未就绪：检查官方扩展与本地适配器',items={
             {title='重新检测官方依赖',value={'script-message','windows-dv-dependencies-refresh'}},
-            {title='启用 Windows 杜比处理（实验）',selectable=inside.available==true,muted=not inside.available,active=inside.enabled,value={'script-message','windows-dv-inwindow-enable'}},
+            {title='启用 Windows 杜比处理（实验）',selectable=inside.available==true,muted=not inside.available,active=inside.enabled and not bridge.attached,value={'script-message','windows-dv-inwindow-enable'}},
             {title='切回原 gpu-next / SDR 映射',active=not inside.enabled,value={'script-message','windows-dv-inwindow-disable'}},
             {title=inside.source_base_transfer=='hlg' and (inside.windows_processed and 'HLG 已按源格式交给 Windows 杜比处理，输出 SDR' or 'HLG 保留 DV 元数据，由 gpu-next 映射；Windows 处理未生效') or
                 ('状态：'..(inside.fallback_reason~='' and inside.fallback_reason or (inside.badge or '等待视频'))),
                 selectable=false,muted=true,value={'ignore'}},
             {title='RPU '..tostring(inside.rpu_seen or 0)..' / Windows处理帧 '..tostring(inside.processed_frames or 0),selectable=false,muted=true,value={'ignore'}},
             {title='内屏输出 SDR；不是物理 DV HDR 输出',selectable=false,muted=true,value={'ignore'}}}},
+        {id='dolby-sdr-bridge',title='Dolby SDR Bridge：'..(bridge.requested and '开' or '关'),
+            hint=bridge_hint(bridge,inside),active=bridge.requested==true,
+            selectable=bridge.available==true or bridge.requested==true,
+            muted=not (bridge.available or bridge.requested),
+            value={'script-message','dolby-sdr-bridge-toggle'}},
         {title='旧实验：Windows 独立窗口（非本窗口）',hint=native.available and '可选；不替换 MPV 默认后端' or '后端检测中 / 未安装',
             selectable=native.available==true,muted=not native.available,items={
                 {title='用 Windows 原生后端播放当前文件',value={'script-message-to','windows_native_dv','start'}},
@@ -568,8 +597,8 @@ local function menu()
                 {title='F1 / P7 原盘继续 MPV；不自动转换或丢增强层',selectable=false,muted=true,value={'ignore'}},
                 {title='重新检测系统扩展',value={'script-message-to','windows_native_dv','probe'}}}},
         {title='Advanced DV to SDR（独立动态映射）',active=mode=='advanced-dv-to-sdr' and inside.enabled~=true,value={'script-message-to','hdr_controls','mode','advanced-dv-to-sdr'}},
-        {title='SDR 映射 + 系统 ICC（参考亮度 auto）',active=mode=='sdr-reference',value={'script-message-to','hdr_controls','mode','sdr-reference'}},
-        {title='跟随显示器：自动 SDR / HDR10（不是原生 DV）',active=mode=='display-auto',value={'script-message-to','hdr_controls','mode','display-auto'}}}
+        {title='SDR 映射 + 系统 ICC（参考亮度 auto）',active=mode=='sdr-reference' and not bridge.processing,value={'script-message-to','hdr_controls','mode','sdr-reference'}},
+        {title='跟随显示器：自动 SDR / HDR10（不是原生 DV）',active=mode=='display-auto' and not bridge.processing,value={'script-message-to','hdr_controls','mode','display-auto'}}}
     local advanced_mapping=effective_advanced_mapping(type(inside.dependency)=='table' and inside.dependency or {})
     local mapping_items={}
     for _,value in ipairs(advanced_mapping_modes) do
@@ -610,11 +639,13 @@ local function menu()
                 playback.el_disabled and '当前后端不变；缺少 EL 画面贡献' or '仅当前文件；开关不改变后端',
             active=not playback.el_disabled,value={'script-message','dv-enhancement-toggle'}})
     end
-    table.insert(items,4,{title=playback.rpu_disabled and 'RPU/EL：已关闭 · BL-only' or 'RPU/EL：完整 DV 路径',
-        hint=playback.profile==5 and 'P5 必须保留 RPU 色彩解释' or
-            (playback.rpu_disabled and '点击恢复 RPU reshape / trim 与 EL 重建' or '点击切换为兼容基础层，画面对比应立即可见'),
-        selectable=playback.can_toggle_rpu,muted=not playback.can_toggle_rpu,
-        value={'script-message','dv-rpu-toggle'}})
+    if s.source_dv or (playback.profile or 0)>0 or playback.rpu_disabled then
+        table.insert(items,4,{title=playback.rpu_disabled and 'RPU/EL：已关闭 · BL-only' or 'RPU/EL：完整 DV 路径',
+            hint=playback.profile==5 and 'P5 必须保留 RPU 色彩解释' or
+                (playback.rpu_disabled and '点击恢复 RPU reshape / trim 与 EL 重建' or '点击切换为兼容基础层，画面对比应立即可见'),
+            selectable=playback.can_toggle_rpu,muted=not playback.can_toggle_rpu,
+            value={'script-message','dv-rpu-toggle'}})
+    end
     table.insert(items,1,{title='视频信息 / Video information',value={'script-message','video-details-toggle'}})
     for _,key in ipairs(order) do
         local sub={}
@@ -632,7 +663,7 @@ local function menu()
     items[#items+1]={title='参数仅本次运行有效；不改原盘、不转码',selectable=false,muted=true,value={'ignore'}}
     local data={type='hdr-controls',title='HDR / Dolby Vision / 色调映射',items=items}
     mp.set_property_native('user-data/hdr-menu',data)
-    mp.commandv('script-message-to','uosc','open-menu',utils.format_json(data))
+    mp.commandv('script-message-to','uosc',refresh==true and 'update-menu' or 'open-menu',utils.format_json(data))
 end
 mp.register_script_message('menu',menu)
 mp.register_script_message('set',function(key,value)
@@ -678,11 +709,20 @@ mp.register_script_message('reset',function()
     for key,value in pairs(defaults) do if value then set(key,value) end end
     snapshot();schedule();mp.add_timeout(0.12,menu)
 end)
-local processed_before=nil
+local processed_before,bridge_before
 mp.observe_property('user-data/windows-dv-inwindow','native',function(_,v)
     local active=type(v)=='table' and (tostring(v.windows_processed==true)..':'..tostring(v.float_output==true)..':'..tostring(v.relative_srgb_output==true)..':'..tostring(v.p5_native_sdr==true)..':'..tostring(v.p8_native_sdr==true)..':'..tostring(v.native_sdr_output==true)) or 'false:false'
     if active~=processed_before then processed_before=active;schedule() end
     snapshot()
+    local b=type(v)=='table' and v.bridge
+    if b then
+        local next_bridge=table.concat({tostring(b.requested),b.readiness,b.state,
+            tostring(b.processing),b.source,tostring(v.source_dv)},':')
+        if next_bridge~=bridge_before then
+            bridge_before=next_bridge
+            if mp.get_property_native('user-data/hdr-menu') then menu(true) end
+        end
+    end
 end)
 mp.observe_property('user-data/dcp','native',schedule)
 mp.observe_property('user-data/dv-playback','native',schedule)

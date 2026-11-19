@@ -27,6 +27,8 @@ local core_available=norm(exe_directory)==norm(directory) or promoted==true
 local dependency={installed=false,state="checking"}
 local preload_waiters={}
 local set_enabled
+local legacy_manual=false
+mp.register_event('start-file',function() legacy_manual=false end)
 local function current_display_name()
  local names=mp.get_property_native('display-names',{})
  return type(names)=='table' and tostring(names[1] or '') or ''
@@ -72,38 +74,59 @@ end
 mp.add_hook('on_preloaded',50,function(hook)
  if options.auto_enable and dependency.state=='checking' then
   hook:defer();preload_waiters[#preload_waiters+1]=hook
- elseif options.auto_enable and set_enabled then
+ elseif options.auto_enable and not legacy_manual and set_enabled then
   set_enabled(automatic_mft_route())
  end
 end)
 local function resume_preload()
- if options.auto_enable and set_enabled then set_enabled(automatic_mft_route()) end
+ if options.auto_enable and not legacy_manual and set_enabled then set_enabled(automatic_mft_route()) end
  local pending=preload_waiters;preload_waiters={}
  for _,hook in ipairs(pending) do hook:cont() end
 end
 local policy=dofile(directory.."/dependency-policy.lua")
+local bridge_policy=dofile(directory..'/dolby-sdr-policy.lua')
 local available=false
+local bridge_requested=false
+local bridge_readiness='checking'
+local windows_wanted=false
+local reconcile
 local dll=directory:gsub('\\','/')..'/windows-dv-frames.dll'
 local label='windows_dv'
 local status={};local last_json='';local known_hlg=false
 mp.register_event('start-file',function()known_hlg=false end)
-local function enabled()
- for _,f in ipairs(mp.get_property_native('vf',{})) do if f.label==label then return true end end
- return false
+local function actual_route()
+ for _,f in ipairs(mp.get_property_native('vf',{})) do
+  if f.label==label and f.enabled~=false then
+   return (f.params or {})['realtime-p81']=='yes' and 'bridge' or 'windows'
+  end
+ end
+end
+local function bridge_source()
+ return bridge_policy.source(mp.get_property_native('video-params',{}),source_profile(),
+   not mp.get_property_bool('idle-active',true))
 end
 local function update()
  local adapter=utils.file_info(directory..'/windows-dv-frames.dll')~=nil and utils.file_info(directory..'/mpv_windows_dv_rpu.dll')~=nil
  available=core_available and policy.windows(dependency,adapter).available and dependency.screen_count==1 and dependency.output_icc~=nil and dependency.output_icc~=""
- local on=enabled()
+ bridge_readiness=bridge_policy.readiness(dependency,core_available and adapter and utils.file_info(directory..'/libdovi.dll')~=nil)
+ local route=actual_route()
+ local on=route~=nil
+ local bridge_on=route=='bridge'
  local meta=on and mp.get_property_native('vf-metadata/'..label,{}) or {}
  if mp.get_property_bool('idle-active',false) then meta={} end
  local src=mp.get_property_native('video-params',{})
  local out=mp.get_property_native('video-out-params',{})
  local seen=tonumber(meta['rpu-seen']) or 0
  local frames=tonumber(meta['processed-frames']) or 0
- local dv=seen>0 or src.colormatrix=='dolbyvision' or out.colormatrix=='dolbyvision'
+ local generated_p81=tonumber(meta['rtpq-generated']) or 0
+ local generated_p84=tonumber(meta['rt84-generated']) or 0
+ local generated=generated_p81+generated_p84
+ local dv=(seen>0 and not bridge_on) or src.colormatrix=='dolbyvision' or out.colormatrix=='dolbyvision'
  local gpu_output=out.pixelformat=='d3d11' and (out['hw-pixelformat']=='bgra' or out['hw-pixelformat']=='rgbaf16' or out['hw-pixelformat']=='x2bgr10') and meta['frame-transport']=='d3d11-gpu' and (tonumber(meta['gpu-frames']) or 0)>0
  local processed=on and frames>0 and (out.pixelformat=='bgra' or gpu_output) and (meta.state=='processed' or meta.state=='processing')
+ local bridge_processed=bridge_on and processed and generated>0 and
+  (meta['fallback-reason'] or '')=='' and
+  (meta['output-contract']=='windows-sdr10-fp16-transport' or meta['output-contract']=='windows-sdr10-rgb10-transport')
  local state=not on and 'off' or (meta.state or 'waiting')
  local hlg=meta['source-base-transfer']=='hlg'
  if meta['source-base-transfer'] and meta['source-base-transfer']~='other-or-unknown' then known_hlg=hlg end
@@ -113,6 +136,10 @@ local function update()
  local renderer_tag=renderer_profile_for_source(profile)
  local renderer_declared=renderer_tag~='' and renderer_declares(renderer_tag) or false
  if mp.get_property_native('user-data/dcp',{}).active==true then text='DCP XYZ | gpu-next → SDR';kind='dcp-xyz';state='disabled-for-dcp'
+ elseif bridge_on then
+  if bridge_processed then text='Dolby SDR Bridge | '..(hlg and 'P8.4' or 'P8.1')..' → SDR';kind='bridge-sdr'
+  elseif state=='fallback' then text='Dolby SDR Bridge | 已回退至 gpu-next';kind='fallback'
+  else text='Dolby SDR Bridge | 等待已处理帧';kind='pending' end
  elseif on and state=='fel-gpu-next' then text='DV FEL | gpu-next → SDR';kind='gpu-next-fel'
  elseif processed and meta['rpu-display-contribution']=='off' then text='Windows HDR → SDR | RPU 显示作用关闭';kind='windows-base-sdr'
  elseif processed then text=(hlg and 'DV/HLG' or 'DV')..' | Windows处理 → SDR';kind='windows-sdr'
@@ -125,7 +152,7 @@ local function update()
  else text='';kind='none' end
  status={dependency=dependency,executable_directory=exe_directory,available=available,enabled=on,state=state,source_dv=dv,windows_processed=processed,
   source_profile=profile,source_profile_string=source_tag,renderer_profile_requested=renderer_tag,
-  renderer_declared=renderer_declared,selected_route=on and 'windows-dolby-mft' or (profile>0 and 'advanced-gpu-next' or 'undecided'),
+  renderer_declared=renderer_declared,selected_route=bridge_on and 'dolby-sdr-bridge' or on and 'windows-dolby-mft' or (profile>0 and 'advanced-gpu-next' or 'undecided'),
   open_route_supported=profile==5 or profile==7 or profile==8 or profile==9 or profile==10,
   p5_native_sdr=processed and meta['source-profile']=='5' and (meta['output-contract']=='windows-sdr10-rgb10-transport' or meta['output-contract']=='windows-sdr10-fp16-transport'),
   p8_native_sdr=processed and meta['source-profile']=='8' and (meta['output-contract']=='windows-sdr10-rgb10-transport' or meta['output-contract']=='windows-sdr10-fp16-transport'),
@@ -136,37 +163,84 @@ local function update()
   windows_effect=meta['rpu-display-contribution']=='off' and 'Windows HDR video processor' or 'Dolby RendererEffect',
   el_contribution=meta['el-contribution'],rpu_display_contribution=meta['rpu-display-contribution'],rpu_forwarded=tonumber(meta['rpu-forwarded']) or 0,
   fallback_reason=meta['fallback-reason'] or '',badge=text,badge_kind=kind,
-  physical_dv_hdr_output=false,output='SDR',experimental=true}
+  physical_dv_hdr_output=false,output='SDR',experimental=true,
+  bridge={requested=bridge_requested,available=bridge_readiness=='ready',readiness=bridge_readiness,
+    attached=bridge_on,processing=bridge_processed,
+    generated_p81=bridge_on and generated_p81 or 0,generated_p84=bridge_on and generated_p84 or 0,
+    processed_frames=bridge_on and frames or 0,source=bridge_source() or '',
+    state=bridge_on and state or bridge_requested and 'waiting-for-compatible-input' or 'off'}}
  local json=utils.format_json(status)
  if json~=last_json then mp.set_property_native('user-data/windows-dv-inwindow',status);last_json=json end
 
 end
-set_enabled=function(wanted)
- if wanted and not enabled() and (mp.get_property_native('user-data/dv-playback',{}).el_disabled or mp.get_property_native('user-data/dv-playback',{}).rpu_disabled) then
-  mp.osd_message('请先恢复 EL／RPU，再启用 Windows 杜比处理',3);return
- end
- if wanted and (mp.get_property_native('user-data/dcp',{}).active==true or mp.get_property('video-params/colormatrix')=='xyz') then update();return end
- if wanted and not available then mp.osd_message('Windows DV 依赖尚未就绪：'..tostring(dependency.state)..'；请通过 Microsoft Store 或设备厂商安装兼容扩展',4);return end
- local refresh=wanted and not enabled() and known_hlg and mp.get_property_bool('pause',false)
+reconcile=function(refresh_bridge)
+ local previous=actual_route()
+ local comparison=mp.get_property_native('user-data/dv-playback',{})
+ local dcp=mp.get_property_native('user-data/dcp',{}).active==true or mp.get_property('video-params/colormatrix')=='xyz'
+ local blocked=dcp or (not previous and (comparison.el_disabled or comparison.rpu_disabled))
+ local wanted=bridge_policy.route(bridge_requested,bridge_readiness,bridge_source(),windows_wanted,available,blocked)
+ if previous==wanted then update();return true end
+ local refresh=(refresh_bridge or wanted=='windows' and not previous and known_hlg) and mp.get_property_bool('pause',false)
  local at=refresh and mp.get_property_number('time-pos')
  local ok,err=true,nil
- if wanted and not enabled() then ok,err=mp.commandv('vf','add','@'..label..':windows-dv=dll=%'..#dll..'%'..dll..(dependency.output_icc and dependency.output_icc~='' and ':output-icc=%'..#dependency.output_icc..'%'..dependency.output_icc or '')..(options.gpu_float and ':gpu-float=yes' or '')..(options.fel_experiment and ':fel-experiment=yes' or ''))
- elseif not wanted and enabled() then ok,err=mp.commandv('vf','remove','@'..label) end
+ if wanted then
+  local args=wanted=='bridge' and ':output-icc=none:gpu-float=yes:realtime-p81=yes:realtime-p84=yes' or
+   (':output-icc=%'..#dependency.output_icc..'%'..dependency.output_icc..
+    (options.gpu_float and ':gpu-float=yes' or '')..(options.fel_experiment and ':fel-experiment=yes' or ''))
+  -- mpv replaces an existing matching vf label atomically, preserving the rest of the chain.
+  ok,err=mp.commandv('vf','add','@'..label..':windows-dv=dll=%'..#dll..'%'..dll..args)
+ elseif previous then ok,err=mp.commandv('vf','remove','@'..label) end
  if ok and at then mp.commandv('seek',at,'absolute+exact') end
  if not ok then mp.osd_message('Windows处理切换失败：'..tostring(err),4) end
  update()
+ return ok
 end
-local function toggle() set_enabled(not enabled()) end
+set_enabled=function(wanted,manual)
+ local bridge_was=bridge_requested
+ if manual then bridge_requested=false end
+ if wanted and manual and not available then
+  bridge_requested=bridge_was
+  mp.osd_message('Windows Dolby 未就绪，请重新检测系统依赖。',4);return
+ end
+ if wanted and manual and not actual_route() then
+  local comparison=mp.get_property_native('user-data/dv-playback',{})
+  if comparison.el_disabled or comparison.rpu_disabled then
+   bridge_requested=bridge_was
+   mp.osd_message('请先恢复 EL／RPU，再启用 Windows Dolby。',3);return
+  end
+ end
+ local windows_was=windows_wanted
+ windows_wanted=wanted
+ if reconcile(manual and bridge_was) then
+  if manual then legacy_manual=true end
+ else
+  bridge_requested=bridge_was;windows_wanted=windows_was;update()
+ end
+end
+local function bridge_toggle()
+ if not bridge_requested and bridge_readiness~='ready' then update();return end
+ bridge_requested=not bridge_requested
+ if reconcile(true)==false then bridge_requested=not bridge_requested;update() end
+end
+local function toggle() set_enabled(actual_route()~='windows',true) end
 mp.add_key_binding('Ctrl+Alt+j','toggle-windows-dv-inwindow',toggle)
 mp.register_script_message('windows-dv-inwindow-toggle',toggle)
-mp.register_script_message('windows-dv-inwindow-enable',function()set_enabled(true)end)
-mp.register_script_message('windows-dv-inwindow-disable',function()set_enabled(false)end)
+mp.register_script_message('windows-dv-inwindow-enable',function()set_enabled(true,true)end)
+mp.register_script_message('windows-dv-inwindow-disable',function()set_enabled(false,true)end)
+mp.register_script_message('dolby-sdr-bridge-toggle',bridge_toggle)
 mp.register_script_message('windows-dv-inwindow-status',update)
 mp.observe_property('video-out-params','native',update)
 mp.observe_property('track-list','native',update)
 mp.observe_property('vf','native',update)
 mp.observe_property('user-data/dcp','native',update)
 mp.observe_property('osd-dimensions','native',update)
+local function refresh_armed()
+ if bridge_requested then reconcile(false) end
+end
+mp.observe_property('video-params','native',refresh_armed)
+mp.observe_property('track-list','native',refresh_armed)
+mp.observe_property('user-data/dcp','native',refresh_armed)
+mp.register_event('end-file',refresh_armed)
 mp.add_periodic_timer(.25,update)
 -- The experimental executable is a clearly separated opt-in entry.
 -- The main executable loads diagnostics only; it never gains this filter implicitly.
@@ -185,9 +259,8 @@ local function detect_dependencies()
    local parsed=ok and result and result.status==0 and utils.parse_json(result.stdout or '')
    dependency=type(parsed)=='table' and parsed or {installed=false,state='probe-failed'}
    update()
-  if not available and enabled() then set_enabled(false) end
-  if available and options.auto_enable then set_enabled(automatic_mft_route()) end
    resume_preload()
+   reconcile(false)
   end)
 end
 mp.register_script_message('windows-dv-dependencies-refresh',detect_dependencies)

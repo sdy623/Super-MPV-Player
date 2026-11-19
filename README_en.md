@@ -5,6 +5,7 @@ A Windows player built on mpv. Use the Windows Dolby Vision processor when avail
 **Windows open edition 2.2.0:** [Download](https://github.com/sdy623/Super-MPV-Player/releases) · [Release notes and known limits](docs/release-2.2.0.md) · [中文](README.md)
 
 - **[Windows Dolby Vision processing](docs/open-edition.md#windows-dependency).** The preferred video path on a compatible setup. Install the licensed component via Microsoft Store or the device manufacturer. The player attempts Windows processing for eligible streams and stays on gpu-next if it can't use it. Check the processed-frame count and fallback state in the HDR menu.
+- **[Dolby SDR Bridge](docs/release-2.3.0-preview.1.md) (2.3.0 preview).** If Windows Dolby video processing is available but your built-in display runs in SDR, let Dolby map HDR10 and HLG to that screen. The player generates dynamic metadata as the video plays, without scanning the whole file or re-encoding it. Off by default.
 - **[Advanced Dolby Vision SDR Rendering (gpu-next)](docs/advanced-dv-hdr-sdr.md).** Maps brightness and color using available Dolby Vision metadata on displays Windows reports as SDR-only. Optional adaptive highlights use display headroom and scene brightness, so large white fields and small highlights in dark scenes don't get a blanket boost. No Dolby extension is required; output is SDR, not a native Dolby Vision signal.
 - **Optional audio mode: [Omniphony object audio](docs/open-edition.md#omniphony-install-the-optional-components-yourself).** With compatible decoder bridges, render supported tracks such as Atmos for binaural headphones or your speaker layout. Install the engine and bridges separately. This audio mode works with either video mode.
 - **Blu-ray.** Open optical discs, ISOs or BDMV folders and use compatible BD-J menus. Encrypted discs need a user-configured backend; no keys are bundled.
@@ -29,7 +30,7 @@ A Windows player built on mpv. Use the Windows Dolby Vision processor when avail
 
 ## Upstream themes and standalone configuration
 
-The notes below cover the inherited cross-platform themes and configuration. The Windows features described above require the integrated installer; upstream mpv builds and configuration ZIPs do not include the modified playback core.
+The notes below cover the inherited cross-platform themes and configuration. The Windows features above require the complete player; upstream mpv and standalone configuration ZIPs do not include the modified playback core.
 
 - Two themes, `modernz` and `uosc`, featuring a beautiful modern UI with a borderless design
 - Uses the native mpv player with configuration and player kept separate, so you do not need to worry about the player being unable to update to the latest version

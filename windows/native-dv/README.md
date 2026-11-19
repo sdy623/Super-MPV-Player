@@ -7,9 +7,15 @@ The adapter uses public Windows Media Foundation / MediaEngine interfaces. Dolby
 3. From `rpu_adapter`, run `cargo test --locked`, then `cargo build --release --locked`. Public upstream synthetic fixtures are used; optional movie fixtures remain excluded/ignored.
 4. In an x64 Native Tools prompt, run `build.cmd` from this directory. The generated DLL and RPU DLL belong beside each other.
 5. Build `core/mpv` using `packaging/windows/Build-Core.ps1`. The recorded options and exact dependency source/recipe links are in `packaging/windows/core-build-options.json` and `docs/native-dependency-sources.json`. The Windows build includes the DV filter. A configuration ZIP alone is not a player runtime.
-6. A runtime assembly places the bridge DLLs, native-controls.lua, dependency-policy.lua and Detect-Dependencies.ps1 in `windows-dv-experimental`, with the portable_config loader. The source repository directory is not itself an installed player.
+6. A runtime assembly places the bridge DLLs, `native-controls.lua`, `dependency-policy.lua`, `dolby-sdr-policy.lua` and `Detect-Dependencies.ps1` in `windows-dv-experimental`, with the portable_config loader. The source repository directory is not itself an installed player.
 
 Detection checks the current user's officially signed Store package, not license entitlement. If OEM deployment uses a different package identity, it remains unsupported until that identity and interface are verified; do not weaken the check to match arbitrary DLL names. Rendering is verified separately by filter state/counters. Missing dependencies preserve the original renderer.
+
+## Dolby SDR Bridge
+
+The HDR/DV switch starts off each session. It is available when the probe reports a compatible Dolby extension with `dvhe.08` and an active SDR output, and the local adapter and libdovi are present. On supported D3D11 P010 input, the filter generates temporary P8.1 metadata for HDR10 or P8.4 metadata for HLG. Original Dolby Vision RPU takes precedence. An unsupported frame or processing failure retains the original frame and its timestamp.
+
+Regenerate the HLG analysis shader with `python tools/dolby-sdr-bridge/generate_rt84.py` on Windows, then put its `rt84_program.inc` in `core/mpv/video/filter/`. The checked-in preset and HLSL are sufficient; no test video is needed.
 
 The P7 MEL RPU adaptation is in-memory. P7 FEL automatically tries the separate, ABI-matched reconstruction helper; a missing or incompatible helper preserves original BL/EL and falls back to gpu-next. P8.4 uses HLG input signaling. SDR output is not native DV HDR display certification.
 

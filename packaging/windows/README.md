@@ -11,6 +11,14 @@ The release uses one UCRT64 integrated core, with Windows processing and origina
 
 These instructions and upstream recipes provide the source/build inputs; a fresh full dependency rebuild and bit-identical reproduction were not part of this packaging verification.
 
+## 2.3.0 preview: portable distribution
+
+Ship one folder with `MPV-Anime.exe`, its runtime, and the matching portable_config. Include `windows-dv-experimental/dolby-sdr-policy.lua` next to `native-controls.lua` and the adapter. The core in the root and Windows Dolby entries has the realtime options; the separate Original Backend entry does not enable Bridge. Keep the accepted 2.2.0 DLL and dependency ABIs.
+
+Set `portable_config/config-version` from `VERSION` and include the [preview release notes](../../docs/release-2.3.0-preview.1.md). Record the exact source commit and core tree in the portable manifest. Archive only the distribution file list, excluding system Dolby components, user profiles, resume state, caches, logs and test media. Test the normal launcher from the portable folder and check the archive before distribution. Supply the corresponding source and the pinned native dependency sources alongside it.
+
+This preview does not use the NSIS installer below; that recipe describes the historical 2.2.0 installer.
+
 ## Assemble and package
 
 Create a separate task directory with `payload/`, `src/`, and `dist/`. Copy `make-files.py` to its root and `installer.nsi` to `src/`. Assemble the reviewed player runtime in `payload/`; the generator is not a downloader and does not fetch arbitrary binaries. Put the integrated core in the root, `windows-dv-experimental/` and `original-backend/`, with matching runtime DLLs. The native controls permit Windows processing only in the matching Windows-processing/root entry points. The `original-backend/` instance stays on MPV mapping.
